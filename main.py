@@ -7,7 +7,7 @@ from PIL import Image
 
 #Глобальные параметры (Россия и мир):
 #Технические:
-img = Image.open('Исходник.png').convert('RGB')
+img = Image.open('Source.png').convert('RGB')
 img_blue_colors = [0 for i in range(0, 256)]
 for i in range(0, img.width):
     for j in range(0, img.height):
