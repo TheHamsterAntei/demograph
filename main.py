@@ -304,14 +304,14 @@ def save_density_image(regs_dict):
                 if t[2] in dict_blues.keys():
                     density = (regs_dict[dict_blues[t[2]]].pop_density) ** 0.5 / (max_dens) ** 0.5 * 255
                     img_density.putpixel((x, y), (int(density * 0.8), 0, int(density * 0.4)))
-    img_density.save("Output//Density//Dens" + str(int(((year - 1897) * 12 + month - 1) / 6)) + '.png', 'PNG')
+    img_density.save("Output/Density/Dens" + str(int(((year - 1897) * 12 + month - 1) / 6)) + '.png', 'PNG')
 
 def main():
     data = pd.read_excel('RegData.xlsx').drop(['Итого', 'Столица субъекта'], axis=1)
-    if not os.path.exists('Output\\'):
+    if not os.path.exists('Output/'):
         os.mkdir('Output')
-    if not os.path.exists('Output\\Density\\'):
-        os.mkdir('Output\\Density')
+    if not os.path.exists('Output/Density/'):
+        os.mkdir('Output/Density')
     nations = data.columns.to_list()
     nations = nations[15:len(nations) - 1]
     regs_dict = {}
