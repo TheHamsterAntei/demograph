@@ -18,6 +18,7 @@ gif_russians = []
 gif_density = []
 gif_gdp = []
 gif_towners = []
+assim_data = pd.read_excel('NationAssimTable.xlsx', index_col='Index')
 #Мир:
 year = 1897
 month = 1
@@ -34,7 +35,9 @@ russian_selfcon = 0.6 #Национальное самосознание рус�
 russian_humilation = 0.1 #Степень унижения русских/России
 russian_unlabour = 90 #Возраст выхода на пенсию
 russian_child = 12 #Возраст, с которого разрешён труд
-
+russian_basic_cost = 8.0 #Базовая стоимость необходимых для жизни продуктов
+russian_monthly_inflation = 1.003 #Месячная инфляция в России
+russian_cumulative_inflation = 1.0 #Общая инфляция с 1897-го года
 
 
 class Population:
@@ -43,6 +46,7 @@ class Population:
         self.rel_by_nations = {}
         self.region = region
         self.nations = nations
+        self.prev_laboured = -1
         for i in range(0, len(nations)):
             self.pop_by_nations[nations[i]] = []
             current_nation_pop = row[15 + i]
@@ -75,7 +79,9 @@ class Population:
         '''Выгрузка текущей величины эффекта демографического перехода для горожан и селян'''
         region_stability = self.region.stability
         region_iswar = self.region.iswar
-        '''Низкая стабильность и нахождение в состоянии войны снижают желание людей заводить детей'''
+        region_hunger = self.region.hunger
+        '''Низкая стабильность и нахождение в состоянии войны снижают желание людей заводить детей.
+        Голод помимо понижения желания заводить детей также быстро сокращает население'''
         region_isrussian = self.region.isrussian
         if region_isrussian == 1:
             region_stability *= (russian_stability**0.5)
@@ -83,6 +89,19 @@ class Population:
         region_prosperity = self.region.person_prosperity
         '''Достаток семей. Желание иметь детей наивысшее у людей с низким уровнем дохода, однако этот параметр имеет
         самую низкую важность'''
+
+        #Посчитать доли национальностей
+        nations_perc_pop = {}
+        for i in self.nations:
+            nations_perc_pop[i] = 0
+            for j in self.pop_by_nations[i]:
+                nations_perc_pop[i] += j[0] + j[1]
+            if nations_perc_pop[i] == 0.0:
+                nations_perc_pop.pop(i)
+                continue
+            nations_perc_pop[i] /= self.region.population
+        perc_pop_keys = list(nations_perc_pop.keys())
+        perc_pop_keys.sort(key=lambda x: -nations_perc_pop[x])
 
         #Шаг 1. "Состарить" население на месяц
         for i in self.nations:
@@ -111,13 +130,18 @@ class Population:
                 stability_risk = 0.00001 + 0.001 * (1 - region_stability)
                 #Эффекты войны
                 war_risk = max(0.0005 * region_iswar, 0.012 * region_iswar * int(bool(45 >= k >= 18)))
+                #Эффекты голода
+                hunger_risk = 0.008 * region_hunger * self.region.hungry_poverty
                 men_dec = men / 12
-                men_inc = (men / 12) * (1 - elder_risk - basic_risk - stability_risk - war_risk)
+                men_inc = (men / 12) * (1 - elder_risk - basic_risk - stability_risk - war_risk - hunger_risk)
                 if men_dec < 1 and men > 0:
                     men_dec = np.random.choice([0, 1], p=(1 - men_dec, men_dec))
                 if int(men_dec) == int(men_inc):
-                    men_inc -= np.random.choice([0, 1], p=(1 - elder_risk - basic_risk - stability_risk - war_risk,
-                                                           elder_risk + basic_risk + stability_risk + war_risk))
+                    men_inc -= np.random.choice([0, 1],
+                                                p=(1 - elder_risk - basic_risk - stability_risk -
+                                                   war_risk - hunger_risk,
+                                                   elder_risk + basic_risk + stability_risk +
+                                                   war_risk + hunger_risk))
                 men_dec = int(men_dec)
                 men_inc = int(men_inc)
                 self.pop_by_nations[i][k][0] -= min(self.pop_by_nations[i][k][0], men_dec)
@@ -144,13 +168,17 @@ class Population:
                 stability_risk = 0.00001 + 0.001 * (1 - region_stability)
                 # Эффекты войны
                 war_risk = 0.0005
+                # Эффекты голода
+                hunger_risk = 0.008 * region_hunger * self.region.hungry_poverty
                 women_dec = int(women / 12)
-                women_inc = int((women / 12) * (1 - elder_risk - basic_risk - stability_risk - war_risk))
+                women_inc = int((women / 12) * (1 - elder_risk - basic_risk - stability_risk - war_risk - hunger_risk))
                 if women_dec < 1 and women > 0:
                     women_dec = np.random.choice([0, 1], p=(1 - women_dec, women_dec))
                 if int(women_dec) == int(women_inc):
-                    women_inc -= np.random.choice([0, 1], p=(1 - elder_risk - basic_risk - stability_risk - war_risk,
-                                                           elder_risk + basic_risk + stability_risk + war_risk))
+                    women_inc -= np.random.choice([0, 1], p=(1 - elder_risk - basic_risk - stability_risk -
+                                                             war_risk - hunger_risk,
+                                                             elder_risk + basic_risk + stability_risk +
+                                                             war_risk + hunger_risk))
                 women_dec = int(women_dec)
                 women_inc = int(women_inc)
                 self.pop_by_nations[i][k][1] -= min(self.pop_by_nations[i][k][1], women_dec)
@@ -159,6 +187,7 @@ class Population:
                     lnn += 1
                 else:
                     self.pop_by_nations[i][k + 1][1] += women_inc
+
         #Шаг 2. "Родить" новых граждан, "умертвить" при родах часть женщин
         #Первичный расчёт граждан репродуктивного возраста
         rep_men = 0 #Количество мужчин репродуктивного возраста
@@ -202,6 +231,8 @@ class Population:
                     preg_risk = 0.2 - min(0.19, 0.006 * medicine)
                 if region_iswar == 1:
                     basic_chance *= 0.5
+                if region_hunger == 1:
+                    basic_chance *= 0.3
                 basic_chance *= k_chance
                 basic_chance *= (region_stability + 0.3)**0.8
                 basic_chance *= 3 - (2.8 * (real_dt**0.3))
@@ -228,7 +259,48 @@ class Population:
                     else:
                         self.pop_by_nations[i][0][1] += 1
                     self.pop_by_nations[i][k][1] -= np.random.choice([0, 1], p=(1 - preg_risk, preg_risk))
-        #Шаг 3. Пересчитать население
+
+        #Шаг 3. Ассимилировать часть граждан в другие народы
+        for i in self.nations:
+            assim_chance = 0
+            for j in perc_pop_keys:
+                assim_chance = nations_perc_pop[j] * assim_data.at[i, j] * 0.005
+                if j == self.region.state_nation:
+                    assim_chance *= (1 + self.region.assimilation)
+                if assim_chance == 0:
+                    continue
+                k = min(41, len(self.pop_by_nations[i]))
+                while k > 12:
+                    k -= 1
+                    age_k = 0.0
+                    if 12 <= k < 16:
+                        age_k = 1.25
+                    else:
+                        if 16 <= k < 21:
+                            age_k = 1.0
+                        else:
+                            if 21 <= k < 28:
+                                age_k = 0.7
+                            else:
+                                if 28 <= k < 35:
+                                    age_k = 0.35
+                                else:
+                                    if 35 <= k:
+                                        age_k = 0.1
+                    for sex in [0, 1]:
+                        target_inc = self.pop_by_nations[i][k][sex] * assim_chance * age_k
+                        if target_inc == 0:
+                            continue
+                        if 0 < target_inc < 1:
+                            target_inc = np.random.choice([0, 1], p=(1 - target_inc, target_inc))
+                            self.pop_by_nations[i][k][sex] -= target_inc
+                            self.pop_by_nations[j][k][sex] += target_inc
+                        if target_inc >= 1:
+                            target_inc = int(target_inc)
+                            self.pop_by_nations[i][k][sex] -= target_inc
+                            self.pop_by_nations[j][k][sex] += target_inc
+
+        #Шаг 4. Пересчитать население
         men_pop = sum([sum([self.pop_by_nations[k1][k2][0] for k2 in range(0, len(self.pop_by_nations[k1]))])
                           for k1 in self.pop_by_nations.keys()])
         women_pop = sum([sum([self.pop_by_nations[k1][k2][1] for k2 in range(0, len(self.pop_by_nations[k1]))])
@@ -240,6 +312,8 @@ class Population:
 
     def return_labour(self):
         gdp = 0.0
+        gdp_k = 1.0
+        laboured = 0
         for i in self.nations:
             k = min(russian_unlabour + 1, len(self.pop_by_nations[i]))
             while k > russian_child:
@@ -247,14 +321,28 @@ class Population:
                 if k < 21:
                     gdp += self.region.gdp_per_person * (self.pop_by_nations[i][k][0] +
                                                          self.pop_by_nations[i][k][1]) * 0.7
+                    laboured += (self.pop_by_nations[i][k][0] + self.pop_by_nations[i][k][1]) * 0.7
                 if 21 <= k < 50 + int(self.region.medicine_quality**0.7):
                     gdp += self.region.gdp_per_person * (self.pop_by_nations[i][k][0] +
                                                          self.pop_by_nations[i][k][1])
+                    laboured += (self.pop_by_nations[i][k][0] + self.pop_by_nations[i][k][1])
                 if 50 + int(self.region.medicine_quality**0.7) <= k:
                     gdp += self.region.gdp_per_person * (self.pop_by_nations[i][k][0] +
                                                          self.pop_by_nations[i][k][1]) * 0.5
-        return int(gdp)
-
+                    laboured += (self.pop_by_nations[i][k][0] + self.pop_by_nations[i][k][1]) * 0.5
+            if self.prev_laboured == -1:
+                gdp_k = 1.0
+            else:
+                if laboured > self.prev_laboured:
+                    gdp_k = ((self.prev_laboured / laboured) + 1) / 2
+                else:
+                    if laboured != 0:
+                        gdp_k = ((self.prev_laboured / laboured) + 0.5) / 1.5
+                    else:
+                        gdp_k = 1.0
+            self.prev_laboured = laboured
+            self.region.unlaboured = self.region.population - laboured
+        return int(gdp * gdp_k)
 
 
 class Region:
@@ -271,7 +359,6 @@ class Region:
         self.life_cost = row[4]
         self.stratification = row[5] * 0.01
         self.infrastructure = row[6]
-        self.housing = 1
 
         #Демографические параметры:
         self.population = row[11]
@@ -286,6 +373,7 @@ class Region:
         self.dem_transition_towns = 0.3 #Выраженность демографического перехода в городах
         self.dem_transition_rural = 0.0 #Выраженность демографического перехода в деревне
         self.population_object = Population(self, nations, row)
+        self.hunger = 0 #Есть ли в регионе ГОЛОД
 
         #Политические параметры:
         self.isrussian = 1
@@ -293,6 +381,8 @@ class Region:
         self.openness = 0.6
         self.governor_eff = 1
         self.stability = 1
+        self.state_nation = 'Русские'
+        self.assimilation = 0.4
         self.monarch_power = 0.5 #Поддержка монархии
         self.autocrat_power = 0.5 #Поддержка авторитаризма
         self.democracy_power = 0.3 #Поддержка демократии
@@ -306,7 +396,22 @@ class Region:
         #Природные параметры:
         self.climate = row[10]
 
+        # Параметры уровня жизни
+        self.housing = int(0.9 * self.population)
+        self.arenda = self.gdp_per_person * (self.population / self.housing) * 0.1
+        self.product_cost = ((russian_basic_cost / self.infrastructure) *
+                             (1 + (self.gdp_per_person / russian_basic_cost**2)))
+        self.poverty = 0
+        self.hungry_poverty = 0
+        self.unlaboured = 0 #Численность иждивенцев
+
     def natural_growth(self):
+        #Снижение стабильности в случае голода
+        if self.stability < 1.0:
+            self.stability = min(1.0, self.stability + 0.02)
+        if self.hunger == 1:
+            if self.stability > 0.25:
+                self.stability -= 0.05
         self.population_object.natural_growth()
 
     def economy_growth(self):
@@ -348,6 +453,39 @@ class Region:
         #Развитие благодаря инфраструктуре
         self.gdp_per_person += (self.infrastructure - 1.0) / 2
         self.gdp_per_person *= 1 + (self.infrastructure - 0.5) * 0.00002
+        #Учёт инфляции
+        self.gdp_per_person *= (1 / russian_monthly_inflation)
+        #Пересчёт стоимости жизни и благосостояния
+        self.housing = int(0.9 * self.population)
+        self.arenda = self.gdp_per_person * (self.population / self.housing) * (1 - self.stratification) * 0.1
+        self.product_cost = russian_basic_cost / self.infrastructure
+        self.life_cost = self.arenda + self.product_cost + self.product_cost * (self.unlaboured /
+                                                                                (self.population - self.unlaboured))
+        if self.population < 180000:
+            self.life_cost = 0
+            self.arenda = 0
+            self.product_cost = 0
+        self.person_prosperity = (0.5 * self.gdp_per_person + (0.5 * self.gdp_per_person * self.stratification) -
+                                  self.life_cost)
+        self.poverty = 0.0
+        self.hungry_poverty = 0.0
+        s = max(0.01, self.stratification)
+        self.poverty = ((self.life_cost / (0.01 * self.gdp_per_person * (1 + s)) -
+                         (1 - s) * 50) / s)
+        if self.poverty > 99.9:
+            self.poverty = 99.9
+        if self.poverty < 0:
+            self.poverty = 0
+        self.hungry_poverty = (((self.life_cost - self.arenda) / (0.01 * self.gdp_per_person * (1 + s)) -
+                                (1 - s) * 50) / s)
+        if self.hungry_poverty > 99.9:
+            self.hungry_poverty = 99.9
+        if self.hungry_poverty < 0:
+            self.hungry_poverty = 0
+        if self.hungry_poverty > 10.0:
+            self.hunger = 1
+        if self.hungry_poverty < 7.0:
+            self.hunger = 0
         #Итоговый подсчёт
         self.region_gdp = self.population_object.return_labour()
 
@@ -457,6 +595,34 @@ class Region:
             if self.dem_transition_rural < self.dem_transition_towns:
                 self.dem_transition_rural += 0.001
 
+    def building(self):
+        #Изменение инфраструктуры
+        if month == 3:
+            if self.infrastructure > 0.01:
+                self.infrastructure = max(0.01, self.infrastructure - 0.2 / self.climate)
+        if self.gdp_per_person * self.governor_eff > 200:
+            if self.infrastructure < 0.5:
+                self.gdp_per_person -= 0.2
+                self.infrastructure += 0.1
+        if self.gdp_per_person * self.governor_eff > 300:
+            if self.infrastructure < 1.0:
+                self.gdp_per_person -= 0.2
+                self.infrastructure += 0.07
+        if self.gdp_per_person * self.governor_eff > 500:
+            if self.infrastructure < 1.5:
+                self.gdp_per_person -= 0.2
+                self.infrastructure += 0.05
+        if self.gdp_per_person * self.governor_eff > 800:
+            if self.infrastructure < 2.0:
+                self.gdp_per_person -= 0.2
+                self.infrastructure = min(2.0, self.infrastructure + 0.04)
+        #Строительство жилья
+        if month == 3:
+            if self.housing > 0:
+                self.housing = max(0, int(self.housing * (0.998 - (3 - self.climate) * 0.0001)))
+        if self.housing < self.population:
+            self.housing += int(self.population * 0.001)
+            self.gdp_per_person *= 0.9995
 
 
 def population_to_str(pop):
@@ -487,8 +653,13 @@ def save_populi_image(regs_dict):
     dict_blues = {}
     max_pop = -1.0
     max_in_reg = {}
+    hunger = {}
     for i in regs_dict.keys():
         dict_blues[regs_dict[i].img_color] = i
+        if regs_dict[i].hunger == 1:
+            hunger[i] = True
+        else:
+            hunger[i] = False
         rus_sum = sum([regs_dict[i].population_object.pop_by_nations['Русские'][k][0] +
                        regs_dict[i].population_object.pop_by_nations['Русские'][k][1]
                        for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Русские']))])
@@ -520,6 +691,11 @@ def save_populi_image(regs_dict):
                     green = max_in_reg[cur_reg][1][1]
                     blue = max_in_reg[cur_reg][1][2]
                     bright = (max_in_reg[cur_reg][0] / max_pop)
+                    if hunger[cur_reg]:
+                        red = 220
+                        green = 0
+                        blue = 0
+                        bright = 1
                     img_density.putpixel((x, y), (int(red * bright), int(green * bright), int(blue * bright)))
     draw = ImageDraw.Draw(img_density)
     fnt = ImageFont.truetype("calibri.ttf", 35)
@@ -528,6 +704,7 @@ def save_populi_image(regs_dict):
     draw.text((280, 1), population_to_str(sum([regs_dict[i].region_gdp for i in regs_dict.keys()])), font=fnt,
               fill=(0, 0, 0))
     img_density.save("Output/Population/Pop" + str(int(((year - 1897) * 12 + month - 1) / 3)) + '.png', 'PNG')
+
 
 def main():
     data = pd.read_excel('RegData.xlsx').drop(['Итого', 'Столица субъекта'], axis=1)
@@ -541,7 +718,7 @@ def main():
     for i in data.iterrows():
         row = i[1].to_list()
         regs_dict[row[0]] = Region(nations, row)
-    global month, year, global_gdp_med, global_max_med
+    global month, year, global_gdp_med, global_max_med, russian_cumulative_inflation, russian_basic_cost
     while year < 2001:
         if ((year - 1897) * 12 + month - 1) % 3 == 0 and ((year - 1897) * 12 + month - 1) != 0:
             save_populi_image(regs_dict)
@@ -550,6 +727,8 @@ def main():
             month = 1
         else:
             month += 1
+        russian_cumulative_inflation *= russian_monthly_inflation
+        russian_basic_cost *= russian_monthly_inflation
         if month == 3:
             global_max_med += 0.1
             global_gdp_med *= 1.03
