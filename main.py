@@ -2,7 +2,7 @@ import numpy as np
 import sys
 import pandas as pd
 import os
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 
 #Глобальные параметры (Россия и мир):
@@ -32,6 +32,9 @@ russian_stability = 0.8 #Стабильность в стране
 russian_democracy = 0.0 #Демократичность режима
 russian_selfcon = 0.6 #Национальное самосознание русских
 russian_humilation = 0.1 #Степень унижения русских/России
+russian_unlabour = 90 #Возраст выхода на пенсию
+russian_child = 12 #Возраст, с которого разрешён труд
+
 
 
 class Population:
@@ -193,34 +196,38 @@ class Population:
                     preg_risk = 0.05 - min(0.048, 0.008 * medicine)
                 if 35 <= k < 40:
                     basic_chance = 0.003
-                    preg_risk = preg_risk = 0.1 - min(0.095, 0.006 * medicine)
+                    preg_risk = 0.1 - min(0.095, 0.006 * medicine)
                 if 40 <= k:
                     basic_chance = 0.001
-                    preg_risk = preg_risk = 0.2 - min(0.19, 0.006 * medicine)
+                    preg_risk = 0.2 - min(0.19, 0.006 * medicine)
                 if region_iswar == 1:
                     basic_chance *= 0.5
                 basic_chance *= k_chance
                 basic_chance *= (region_stability + 0.3)**0.8
-                basic_chance *= 4 - (3.8 * (real_dt**0.3))
+                basic_chance *= 3 - (2.8 * (real_dt**0.3))
                 if region_prosperity < -100.0:
-                    basic_chance *= 2
+                    basic_chance *= 2 - (1 - real_dt**0.3)
                 if -100.0 <= region_prosperity < -50.0:
-                    basic_chance *= 1.5
+                    basic_chance *= 1.5 - (0.5 - real_dt**0.3 * 0.5)
                 if -50.0 <= region_prosperity < 0:
-                    basic_chance *= 1.2
+                    basic_chance *= 1.2 - (0.2 - real_dt**0.3 * 0.2)
                 birth_count = self.pop_by_nations[i][k][1] * basic_chance
                 if birth_count < 0:
                     birth_count = 0
                 if 0.0 < birth_count < 1.0:
                     birth_count = np.random.choice([0, 1], p=(1 - birth_count, birth_count))
+                    if birth_count == 1:
+                        self.pop_by_nations[i][k][1] -= np.random.choice([0, 1], p=(1 - preg_risk, preg_risk))
                 if birth_count >= 2.0:
                     self.pop_by_nations[i][0][0] += int(birth_count / 2)
                     self.pop_by_nations[i][0][1] += int(birth_count - int(birth_count / 2))
+                    self.pop_by_nations[i][k][1] -= int(birth_count * preg_risk)
                 if birth_count == 1.0:
                     if np.random.choice([0, 1], p=(0.5, 0.5)) == 0:
                         self.pop_by_nations[i][0][0] += 1
                     else:
                         self.pop_by_nations[i][0][1] += 1
+                    self.pop_by_nations[i][k][1] -= np.random.choice([0, 1], p=(1 - preg_risk, preg_risk))
         #Шаг 3. Пересчитать население
         men_pop = sum([sum([self.pop_by_nations[k1][k2][0] for k2 in range(0, len(self.pop_by_nations[k1]))])
                           for k1 in self.pop_by_nations.keys()])
@@ -230,6 +237,24 @@ class Population:
         self.region.population = population
         self.region.men_pop = men_pop
         self.region.women_pop = women_pop
+
+    def return_labour(self):
+        gdp = 0.0
+        for i in self.nations:
+            k = min(russian_unlabour + 1, len(self.pop_by_nations[i]))
+            while k > russian_child:
+                k -= 1
+                if k < 21:
+                    gdp += self.region.gdp_per_person * (self.pop_by_nations[i][k][0] +
+                                                         self.pop_by_nations[i][k][1]) * 0.7
+                if 21 <= k < 50 + int(self.region.medicine_quality**0.7):
+                    gdp += self.region.gdp_per_person * (self.pop_by_nations[i][k][0] +
+                                                         self.pop_by_nations[i][k][1])
+                if 50 + int(self.region.medicine_quality**0.7) <= k:
+                    gdp += self.region.gdp_per_person * (self.pop_by_nations[i][k][0] +
+                                                         self.pop_by_nations[i][k][1]) * 0.5
+        return int(gdp)
+
 
 
 class Region:
@@ -283,27 +308,225 @@ class Region:
 
     def natural_growth(self):
         self.population_object.natural_growth()
-        if self.dem_transition_towns < 1:
-            self.dem_transition_towns += 0.001
-        if self.dem_transition_towns > 0.8:
-            if self.dem_transition_rural < 1:
+
+    def economy_growth(self):
+        #Догоняющее развитие
+        if self.isrussian == 1:
+            if self.gdp_per_person * 2 / (0.1 + russian_openness * 0.9) < global_gdp_med:
+                self.gdp_per_person += 0.25
+        else:
+            if self.gdp_per_person * 2 < global_gdp_med:
+                self.gdp_per_person += 0.25
+        #Развитие благодаря урбанизации
+        self.gdp_per_person *= 1 + 0.0005 * self.town_pop
+        #Развитие благодаря грамотности
+        if self.literacy < 0.1:
+            self.gdp_per_person = min(200, self.gdp_per_person)
+        else:
+            if self.literacy < 0.5:
+                self.gdp_per_person = min(500, self.gdp_per_person)
+                if self.gdp_per_person < 100:
+                    self.gdp_per_person += 0.1
+            else:
+                if self.literacy < 0.9:
+                    if self.gdp_per_person < 150:
+                        self.gdp_per_person += 0.2
+                    self.gdp_per_person *= 1 + 0.0003
+                else:
+                    if self.gdp_per_person < 200:
+                        self.gdp_per_person += 0.25
+                    self.gdp_per_person *= 1 + 0.0005
+        #Развитие благодаря эффективности губернатора
+        if self.governor_eff < 0.5:
+            self.gdp_per_person *= 0.9998
+        else:
+            if 0.5 <= self.governor_eff < 0.9:
+                self.gdp_per_person *= 1 + (self.governor_eff - 0.7) * 0.0001
+            else:
+                self.gdp_per_person += 0.1
+                self.gdp_per_person *= 1 + (self.governor_eff - 0.7) * 0.0001
+        #Развитие благодаря инфраструктуре
+        self.gdp_per_person += (self.infrastructure - 1.0) / 2
+        self.gdp_per_person *= 1 + (self.infrastructure - 0.5) * 0.00002
+        #Итоговый подсчёт
+        self.region_gdp = self.population_object.return_labour()
+
+    def literacy_and_medicine(self):
+        if self.literacy < 1:
+            #Рост грамотности от урбанизации
+            if self.town_pop > 0.45:
+                if self.literacy < 0.5:
+                    self.literacy += 0.001
+                else:
+                    self.literacy += 0.0002
+            #Рост грамотности от качества образования
+            if self.education_quality > 1.0:
+                self.literacy += 0.001
+            if self.education_quality > 5.0:
+                self.literacy += 0.002
+            if self.education_quality > 9.0:
+                self.literacy += 0.002
+            #Рост грамотности от ВВП
+            if self.gdp_per_person > 300:
+                self.literacy += 0.001
+        else:
+            self.literacy = 1.0
+        #Медицина
+        if self.literacy < 0.1:
+            if self.medicine_quality > 0.1:
+                self.medicine_quality -= 0.025
+            else:
+                self.medicine_quality = 0.1
+        else:
+            if self.literacy < 0.5:
+                if self.medicine_quality > 10.0:
+                    self.medicine_quality -= 0.05
+            else:
+                if self.education_quality > 3.0:
+                    if self.medicine_quality * 2 < global_max_med:
+                        self.medicine_quality += 0.025
+                if self.education_quality > 6.0:
+                    if self.medicine_quality * 1.2 < global_max_med:
+                        self.medicine_quality += 0.025
+                if self.education_quality > 8.5:
+                    if self.medicine_quality < global_max_med:
+                        self.medicine_quality += 0.01
+                    else:
+                        self.medicine_quality = global_max_med
+        #Качество образования
+        if month == 6:
+            self.education_quality -= 0.1
+        if self.gdp_per_person * 0.9 > global_gdp_med:
+            if self.education_quality < 10.0:
+                self.education_quality += 0.02
+            else:
+                self.education_quality = 10.0
+        if self.gdp_per_person * 1.2 > global_gdp_med:
+            if self.education_quality < 9.0:
+                self.education_quality += 0.02
+        if self.gdp_per_person * 1.5 > global_gdp_med:
+            if self.education_quality < 5.0:
+                self.education_quality += 0.02
+        if self.gdp_per_person * 2.0 > global_gdp_med:
+            if self.education_quality < 2.0:
+                self.education_quality += 0.02
+        if self.gdp_per_person * 3.0 > global_gdp_med:
+            if self.education_quality < 1.0:
+                self.education_quality += 0.02
+
+    def urban(self):
+        #Рост урбанизации
+        if self.gdp_per_person > 100:
+            if self.town_pop < 0.5:
+                self.town_pop += 0.0001
+        if self.gdp_per_person > 500:
+            if self.town_pop < 0.7:
+                self.town_pop += 0.0001
+        if self.literacy > 0.9:
+            if self.town_pop < 0.8:
+                self.town_pop += 0.0001
+        #Демографический переход
+        if self.gdp_per_person > 200:
+            if self.dem_transition_towns < 0.9:
+                self.dem_transition_towns += 0.001
+            if self.dem_transition_rural < 0.2:
+                self.dem_transition_rural += 0.001
+        if self.gdp_per_person > 1000:
+            if self.dem_transition_towns < 0.95:
+                self.dem_transition_towns += 0.0004
+            if self.dem_transition_rural < 0.8:
                 self.dem_transition_rural += 0.0005
+        if self.gdp_per_person > 2000:
+            if self.dem_transition_towns < 1.0:
+                self.dem_transition_towns += 0.0002
+            else:
+                self.dem_transition_towns = 1.0
+            if self.dem_transition_rural < 1.0:
+                self.dem_transition_rural += 0.0002
+            else:
+                self.dem_transition_rural = 1.0
+        if self.literacy > 0.95:
+            if self.dem_transition_towns < 0.9:
+                self.dem_transition_towns += 0.0004
+            if self.dem_transition_rural < 0.5:
+                self.dem_transition_rural += 0.0005
+        if self.town_pop > 0.3:
+            if self.dem_transition_rural < 0.3:
+                self.dem_transition_rural += 0.0004
+        if self.town_pop > 0.5:
+            if self.dem_transition_rural < self.dem_transition_towns:
+                self.dem_transition_rural += 0.001
+
+
+
+def population_to_str(pop):
+    str_pop = ''
+    pop = int(pop)
+    if pop < 1000:
+        str_pop = str(pop)
+        return str_pop
+    else:
+        while pop > 0:
+            if str_pop != '':
+                to_pop = str(pop % 1000)
+                if pop > 1000:
+                    while len(to_pop) < 3:
+                        to_pop = '0' + to_pop
+                str_pop = to_pop + '.' + str_pop
+            else:
+                to_pop = str(pop % 1000)
+                if pop > 1000:
+                    while len(to_pop) < 3:
+                        to_pop = '0' + to_pop
+                str_pop = to_pop
+            pop //= 1000
+        return str_pop
 
 
 def save_populi_image(regs_dict):
     dict_blues = {}
-    max_pop = 1.0
+    max_pop = -1.0
+    max_in_reg = {}
     for i in regs_dict.keys():
         dict_blues[regs_dict[i].img_color] = i
-        max_pop = max(max_pop, regs_dict[i].population)
+        rus_sum = sum([regs_dict[i].population_object.pop_by_nations['Русские'][k][0] +
+                       regs_dict[i].population_object.pop_by_nations['Русские'][k][1]
+                       for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Русские']))])
+        ukr_sum = sum([regs_dict[i].population_object.pop_by_nations['Украинцы'][k][0] +
+                       regs_dict[i].population_object.pop_by_nations['Украинцы'][k][1]
+                       for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Украинцы']))])
+        bel_sum = sum([regs_dict[i].population_object.pop_by_nations['Белорусы'][k][0] +
+                       regs_dict[i].population_object.pop_by_nations['Белорусы'][k][1]
+                       for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Белорусы']))])
+        max_pop = max(max_pop, rus_sum, ukr_sum, bel_sum)
+        max_in_reg[i] = [-1.0, (0, 0, 0)]
+        if rus_sum > max_in_reg[i][0]:
+            max_in_reg[i][0] = rus_sum
+            max_in_reg[i][1] = (200, 30, 120)
+        if ukr_sum > max_in_reg[i][0]:
+            max_in_reg[i][0] = ukr_sum
+            max_in_reg[i][1] = (220, 180, 30)
+        if bel_sum > max_in_reg[i][0]:
+            max_in_reg[i][0] = bel_sum
+            max_in_reg[i][1] = (30, 225, 60)
     img_density = img.copy()
     for x in range(0, img_density.width):
-        for y in range(0, img_density.height):
+        for y in range(38, img_density.height):
             t = img_density.getpixel((x, y))
             if t[0] == 0 and t[1] == 0:
                 if t[2] in dict_blues.keys():
-                    density = (regs_dict[dict_blues[t[2]]].population / max_pop) * 255
-                    img_density.putpixel((x, y), (int(density * 0.8), 0, int(density * 0.4)))
+                    cur_reg = dict_blues[t[2]]
+                    red = max_in_reg[cur_reg][1][0]
+                    green = max_in_reg[cur_reg][1][1]
+                    blue = max_in_reg[cur_reg][1][2]
+                    bright = (max_in_reg[cur_reg][0] / max_pop)
+                    img_density.putpixel((x, y), (int(red * bright), int(green * bright), int(blue * bright)))
+    draw = ImageDraw.Draw(img_density)
+    fnt = ImageFont.truetype("calibri.ttf", 35)
+    draw.text((30, 1), population_to_str(sum([regs_dict[i].population for i in regs_dict.keys()])), font=fnt,
+              fill=(0, 0, 0))
+    draw.text((280, 1), population_to_str(sum([regs_dict[i].region_gdp for i in regs_dict.keys()])), font=fnt,
+              fill=(0, 0, 0))
     img_density.save("Output/Population/Pop" + str(int(((year - 1897) * 12 + month - 1) / 3)) + '.png', 'PNG')
 
 def main():
@@ -318,17 +541,25 @@ def main():
     for i in data.iterrows():
         row = i[1].to_list()
         regs_dict[row[0]] = Region(nations, row)
-    global month, year
+    global month, year, global_gdp_med, global_max_med
     while year < 2001:
-        if ((year - 1897) * 12 + month - 1) % 3 == 0:
+        if ((year - 1897) * 12 + month - 1) % 3 == 0 and ((year - 1897) * 12 + month - 1) != 0:
             save_populi_image(regs_dict)
         if month == 12:
             year += 1
             month = 1
         else:
             month += 1
+        if month == 3:
+            global_max_med += 0.1
+            global_gdp_med *= 1.03
+        if month == 9:
+            global_max_med += 0.1
         for i in regs_dict.keys():
             regs_dict[i].natural_growth()
+            regs_dict[i].economy_growth()
+            regs_dict[i].literacy_and_medicine()
+            regs_dict[i].urban()
     #Ниже тесты рисования
     sys.exit(0)
     dict_blues = {}
