@@ -35,7 +35,7 @@ russian_selfcon = 0.6 #Национальное самосознание рус�
 russian_humilation = 0.1 #Степень унижения русских/России
 russian_unlabour = 90 #Возраст выхода на пенсию
 russian_child = 12 #Возраст, с которого разрешён труд
-russian_basic_cost = 8.0 #Базовая стоимость необходимых для жизни продуктов
+russian_basic_cost = 3.0 #Базовая стоимость необходимых для жизни продуктов
 russian_monthly_inflation = 1.003 #Месячная инфляция в России
 russian_cumulative_inflation = 1.0 #Общая инфляция с 1897-го года
 
@@ -131,7 +131,19 @@ class Population:
                 #Эффекты войны
                 war_risk = max(0.0005 * region_iswar, 0.012 * region_iswar * int(bool(45 >= k >= 18)))
                 #Эффекты голода
-                hunger_risk = 0.008 * region_hunger * self.region.hungry_poverty
+                hunger_risk = 0.00008 * region_hunger * self.region.hungry_poverty
+                if k < 2:
+                    hunger_risk *= 5.5
+                if 2 <= k < 7:
+                    hunger_risk *= 4.0
+                if 7 <= k < 12:
+                    hunger_risk *= 2.0
+                if 12 <= k < 27:
+                    hunger_risk *= 0.6
+                if 27 <= k < 45:
+                    hunger_risk *= 0.75
+                if 45 <= k:
+                    hunger_risk *= 1.5
                 men_dec = men / 12
                 men_inc = (men / 12) * (1 - elder_risk - basic_risk - stability_risk - war_risk - hunger_risk)
                 if men_dec < 1 and men > 0:
@@ -169,7 +181,19 @@ class Population:
                 # Эффекты войны
                 war_risk = 0.0005
                 # Эффекты голода
-                hunger_risk = 0.008 * region_hunger * self.region.hungry_poverty
+                hunger_risk = 0.00008 * region_hunger * self.region.hungry_poverty
+                if k < 2:
+                    hunger_risk *= 5.5
+                if 2 <= k < 7:
+                    hunger_risk *= 4.0
+                if 7 <= k < 12:
+                    hunger_risk *= 2.0
+                if 12 <= k < 27:
+                    hunger_risk *= 0.6
+                if 27 <= k < 45:
+                    hunger_risk *= 0.75
+                if 45 <= k:
+                    hunger_risk *= 1.5
                 women_dec = int(women / 12)
                 women_inc = int((women / 12) * (1 - elder_risk - basic_risk - stability_risk - war_risk - hunger_risk))
                 if women_dec < 1 and women > 0:
@@ -374,6 +398,7 @@ class Region:
         self.dem_transition_rural = 0.0 #Выраженность демографического перехода в деревне
         self.population_object = Population(self, nations, row)
         self.hunger = 0 #Есть ли в регионе ГОЛОД
+        self.product_dotation = 0 #Дотации на продукты для борьбы с голодом
 
         #Политические параметры:
         self.isrussian = 1
@@ -453,15 +478,16 @@ class Region:
         #Развитие благодаря инфраструктуре
         self.gdp_per_person += (self.infrastructure - 1.0) / 2
         self.gdp_per_person *= 1 + (self.infrastructure - 0.5) * 0.00002
-        #Учёт инфляции
-        self.gdp_per_person *= (1 / russian_monthly_inflation)
         #Пересчёт стоимости жизни и благосостояния
         self.housing = int(0.9 * self.population)
-        self.arenda = self.gdp_per_person * (self.population / self.housing) * (1 - self.stratification) * 0.1
+        self.arenda = self.gdp_per_person * (self.population / self.housing) * (1 - self.stratification ** 2) * 0.25
         self.product_cost = russian_basic_cost / self.infrastructure
+        gdp_life_k = min(1.0, self.gdp_per_person**1.4 / 200)
+        self.product_cost *= gdp_life_k
+        self.product_cost = max(0.0, self.product_cost - self.product_dotation)
         self.life_cost = self.arenda + self.product_cost + self.product_cost * (self.unlaboured /
                                                                                 (self.population - self.unlaboured))
-        if self.population < 180000:
+        if self.population < 150000:
             self.life_cost = 0
             self.arenda = 0
             self.product_cost = 0
@@ -486,6 +512,26 @@ class Region:
             self.hunger = 1
         if self.hungry_poverty < 7.0:
             self.hunger = 0
+        if self.poverty < 10:
+            self.stratification = min(0.9, self.stratification + 0.004)
+        if self.poverty > 70:
+            if self.stratification < 0.4:
+                self.stratification += 0.002
+        if self.hungry_poverty > 5:
+            if self.stratification < 0.4:
+                self.stratification += 0.002
+            if self.hungry_poverty > 10:
+                if self.gdp_per_person > 5.0:
+                    self.gdp_per_person -= 0.5
+                    self.product_dotation += 1.0
+                    self.stratification = max(0.0, self.stratification - 0.009)
+            if self.hungry_poverty > 30:
+                if self.stratification < 0.7:
+                    self.stratification = self.stratification + 0.004
+        else:
+            if self.product_dotation > 0:
+                self.gdp_per_person += min(0.25, self.product_dotation) * 0.2
+                self.product_dotation = max(0.0, self.product_dotation - 0.25)
         #Итоговый подсчёт
         self.region_gdp = self.population_object.return_labour()
 
@@ -649,6 +695,24 @@ def population_to_str(pop):
         return str_pop
 
 
+def date_as_str():
+    month_dict = {
+        1: 'янв.',
+        2: 'фев.',
+        3: 'мар.',
+        4: 'апр.',
+        5: 'май',
+        6: 'июн.',
+        7: 'июл.',
+        8: 'авг.',
+        9: 'сен.',
+        10: 'окт.',
+        11: 'ноя.',
+        12: 'дек.'
+    }
+    return str(year) + ', ' + month_dict[month]
+
+
 def save_populi_image(regs_dict):
     dict_blues = {}
     max_pop = -1.0
@@ -701,8 +765,11 @@ def save_populi_image(regs_dict):
     fnt = ImageFont.truetype("calibri.ttf", 35)
     draw.text((30, 1), population_to_str(sum([regs_dict[i].population for i in regs_dict.keys()])), font=fnt,
               fill=(0, 0, 0))
-    draw.text((280, 1), population_to_str(sum([regs_dict[i].region_gdp for i in regs_dict.keys()])), font=fnt,
-              fill=(0, 0, 0))
+    draw.text((280, 1), population_to_str(sum([regs_dict[i].region_gdp * russian_cumulative_inflation
+                                               for i in regs_dict.keys()])), font=fnt, fill=(0, 0, 0))
+    draw.text((596, 1), population_to_str(sum([regs_dict[i].poverty for i in regs_dict.keys()]) / len(regs_dict.keys()))
+              + '%', font=fnt, fill=(0, 0, 0))
+    draw.text((1615, 1), date_as_str(), font=fnt, fill=(0, 0, 0))
     img_density.save("Output/Population/Pop" + str(int(((year - 1897) * 12 + month - 1) / 3)) + '.png', 'PNG')
 
 
@@ -720,7 +787,7 @@ def main():
         regs_dict[row[0]] = Region(nations, row)
     global month, year, global_gdp_med, global_max_med, russian_cumulative_inflation, russian_basic_cost
     while year < 2001:
-        if ((year - 1897) * 12 + month - 1) % 3 == 0 and ((year - 1897) * 12 + month - 1) != 0:
+        if ((year - 1897) * 12 + month - 1) % 5 == 0 and ((year - 1897) * 12 + month - 1) != 0:
             save_populi_image(regs_dict)
         if month == 12:
             year += 1
