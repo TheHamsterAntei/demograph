@@ -437,7 +437,7 @@ class Region:
         if self.hunger == 1:
             if self.stability > 0.25:
                 self.stability -= 0.05
-        self.gdp_per_person = max(1.0, self.dgp_per_person)
+        self.gdp_per_person = max(1.0, self.gdp_per_person)
         self.population_object.natural_growth()
 
     def economy_growth(self):
@@ -480,7 +480,7 @@ class Region:
         self.gdp_per_person += (self.infrastructure - 1.0) / 2
         self.gdp_per_person *= 1 + (self.infrastructure - 0.5) * 0.00002
         #Пересчёт стоимости жизни и благосостояния
-        self.gdp_per_person = max(1.0, self.dgp_per_person)
+        self.gdp_per_person = max(1.0, self.gdp_per_person)
         self.housing = int(0.9 * self.population)
         self.arenda = self.gdp_per_person * (self.population / self.housing) * (1 - self.stratification ** 2) * 0.25
         self.product_cost = russian_basic_cost / self.infrastructure
@@ -535,9 +535,9 @@ class Region:
                 self.gdp_per_person += min(0.25, self.product_dotation) * 0.2
                 self.product_dotation = max(0.0, self.product_dotation - 0.25)
         #Итоговый подсчёт
-        self.gdp_per_person = max(1.0, self.dgp_per_person)
+        self.gdp_per_person = max(1.0, self.gdp_per_person)
         self.region_gdp = self.population_object.return_labour()
-        self.gdp_per_person = max(1.0, self.dgp_per_person)
+        self.gdp_per_person = max(1.0, self.gdp_per_person)
 
     def literacy_and_medicine(self):
         if self.literacy < 1:
