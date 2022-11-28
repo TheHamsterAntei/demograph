@@ -19,6 +19,7 @@ gif_density = []
 gif_gdp = []
 gif_towners = []
 assim_data = pd.read_excel('NationAssimTable.xlsx', index_col='Index')
+img_num = 1 #Номер изображения
 #Мир:
 year = 1897
 month = 1
@@ -35,9 +36,11 @@ russian_selfcon = 0.6 #Национальное самосознание рус�
 russian_humilation = 0.1 #Степень унижения русских/России
 russian_unlabour = 90 #Возраст выхода на пенсию
 russian_child = 12 #Возраст, с которого разрешён труд
-russian_basic_cost = 3.0 #Базовая стоимость необходимых для жизни продуктов
+russian_basic_cost = 5.0 #Базовая стоимость необходимых для жизни продуктов
 russian_monthly_inflation = 1.003 #Месячная инфляция в России
 russian_cumulative_inflation = 1.0 #Общая инфляция с 1897-го года
+russian_social_politics = 0.01 #Показатель "социальности" политики России
+russian_med_gdp = 250
 
 
 class Population:
@@ -428,6 +431,7 @@ class Region:
                              (1 + (self.gdp_per_person / russian_basic_cost**2)))
         self.poverty = 0
         self.hungry_poverty = 0
+        self.population_object.return_labour()
         self.unlaboured = 0 #Численность иждивенцев
 
     def natural_growth(self):
@@ -441,13 +445,21 @@ class Region:
         self.population_object.natural_growth()
 
     def economy_growth(self):
+        #Базовое развитие (зависит от наличия инфляции)
+        if self.isrussian == 1:
+            if russian_monthly_inflation > 1.0:
+                self.gdp_per_person *= max(1.0004, 1.005 / russian_monthly_inflation)
+        else:
+            self.gdp_per_person *= 1.001
         #Догоняющее развитие
         if self.isrussian == 1:
             if self.gdp_per_person * 2 / (0.1 + russian_openness * 0.9) < global_gdp_med:
                 self.gdp_per_person += 0.25
+            self.gdp_per_person += 0.05 * russian_med_gdp / self.gdp_per_person
         else:
             if self.gdp_per_person * 2 < global_gdp_med:
                 self.gdp_per_person += 0.25
+            self.gdp_per_person += 0.02
         #Развитие благодаря урбанизации
         self.gdp_per_person *= 1 + 0.0005 * self.town_pop
         #Развитие благодаря грамотности
@@ -481,7 +493,6 @@ class Region:
         self.gdp_per_person *= 1 + (self.infrastructure - 0.5) * 0.00002
         #Пересчёт стоимости жизни и благосостояния
         self.gdp_per_person = max(1.0, self.gdp_per_person)
-        self.housing = int(0.9 * self.population)
         self.arenda = self.gdp_per_person * (self.population / self.housing) * (1 - self.stratification ** 2) * 0.25
         self.product_cost = russian_basic_cost / self.infrastructure
         gdp_life_k = min(1.0, self.gdp_per_person**1.4 / 200)
@@ -489,14 +500,13 @@ class Region:
         self.product_cost = max(0.0, self.product_cost - self.product_dotation)
         self.life_cost = self.arenda + self.product_cost + self.product_cost * (self.unlaboured /
                                                                                 (self.population - self.unlaboured))
+        self.life_cost *= russian_monthly_inflation ** 0.5
         if self.population < 150000:
             self.life_cost = 0
             self.arenda = 0
             self.product_cost = 0
         self.person_prosperity = (0.5 * self.gdp_per_person + (0.5 * self.gdp_per_person * self.stratification) -
                                   self.life_cost)
-        self.poverty = 0.0
-        self.hungry_poverty = 0.0
         s = max(0.01, self.stratification)
         self.poverty = ((self.life_cost / (0.01 * self.gdp_per_person * (1 + s)) -
                          (1 - s) * 50) / s)
@@ -515,10 +525,12 @@ class Region:
         if self.hungry_poverty < 7.0:
             self.hunger = 0
         if self.poverty < 10:
-            self.stratification = min(0.9, self.stratification + 0.004)
+            if self.stratification < 0.9:
+                self.stratification += 0.004
         if self.poverty > 70:
             if self.stratification < 0.4:
                 self.stratification += 0.002
+        #Стратификация и социальная политика
         if self.hungry_poverty > 5:
             if self.stratification < 0.4:
                 self.stratification += 0.002
@@ -534,10 +546,11 @@ class Region:
             if self.product_dotation > 0:
                 self.gdp_per_person += min(0.25, self.product_dotation) * 0.2
                 self.product_dotation = max(0.0, self.product_dotation - 0.25)
+        self.stratification = min(1.0, self.stratification + (1 - russian_monthly_inflation ** 0.3))
+        self.stratification = max(0.0, self.stratification - russian_social_politics * 0.1)
         #Итоговый подсчёт
         self.gdp_per_person = max(1.0, self.gdp_per_person)
         self.region_gdp = self.population_object.return_labour()
-        self.gdp_per_person = max(1.0, self.gdp_per_person)
 
     def literacy_and_medicine(self):
         if self.literacy < 1:
@@ -717,7 +730,29 @@ def date_as_str():
     return str(year) + ', ' + month_dict[month]
 
 
+def ethnic_list(regs_dict):
+    nations_list = []
+    target = len(regs_dict[list(regs_dict.keys())[0]].population_object.pop_by_nations.keys())
+    for i in regs_dict.keys():
+        for j in regs_dict[i].population_object.pop_by_nations.keys():
+            population = 0
+            if len(nations_list) < target:
+                if len(nations_list) == 0:
+                    nations_list.append([j, 0])
+                else:
+                    if not j in [nl[0] for nl in nations_list]:
+                        nations_list.append([j, 0])
+            for t in regs_dict[i].population_object.pop_by_nations[j]:
+                population += t[0] + t[1]
+            for t in range(0, len(nations_list)):
+                if nations_list[t][0] == j:
+                    nations_list[t][1] += population
+    nations_list.sort(key=lambda x: -x[1])
+    return nations_list
+
+
 def save_populi_image(regs_dict):
+    global img_num
     dict_blues = {}
     max_pop = -1.0
     max_in_reg = {}
@@ -771,10 +806,23 @@ def save_populi_image(regs_dict):
               fill=(0, 0, 0))
     draw.text((280, 1), population_to_str(sum([regs_dict[i].region_gdp * russian_cumulative_inflation
                                                for i in regs_dict.keys()])), font=fnt, fill=(0, 0, 0))
-    draw.text((596, 1), population_to_str(sum([regs_dict[i].poverty for i in regs_dict.keys()]) / len(regs_dict.keys()))
+    draw.text((596, 1), str(int(sum([regs_dict[i].poverty for i in regs_dict.keys()]) / len(regs_dict.keys())))
               + '%', font=fnt, fill=(0, 0, 0))
-    draw.text((1615, 1), date_as_str(), font=fnt, fill=(0, 0, 0))
-    img_density.save("Output/Population/Pop" + str(int(((year - 1897) * 12 + month - 1) / 3)) + '.png', 'PNG')
+    draw.text((717, 1), str(int(sum([regs_dict[i].literacy for i in regs_dict.keys()]) * 100 / len(regs_dict.keys())))
+              + '%', font=fnt, fill=(0, 0, 0))
+    draw.text((840, 1), str(int(sum([regs_dict[i].town_pop for i in regs_dict.keys()]) * 100 / len(regs_dict.keys())))
+              + '%', font=fnt, fill=(0, 0, 0))
+    nations_list = ethnic_list(regs_dict)
+    pos = 79
+    gray = 0
+    fnt_small = ImageFont.truetype("calibri.ttf", 18)
+    for i in nations_list[:12]:
+        draw.text((1773, pos), i[0] + ': ' + population_to_str(i[1]), font=fnt_small, fill=(gray, gray, gray))
+        pos += 22
+        gray += 7
+    draw.text((1773, 1), date_as_str(), font=fnt, fill=(0, 0, 0))
+    img_density.save("Output/Population/Pop" + str(img_num) + '.png', 'PNG')
+    img_num += 1
 
 
 def main():
@@ -790,8 +838,9 @@ def main():
         row = i[1].to_list()
         regs_dict[row[0]] = Region(nations, row)
     global month, year, global_gdp_med, global_max_med, russian_cumulative_inflation, russian_basic_cost
+    global russian_med_gdp
     while year < 2001:
-        if ((year - 1897) * 12 + month - 1) % 5 == 0 and ((year - 1897) * 12 + month - 1) != 0:
+        if year + month != 1898:
             save_populi_image(regs_dict)
         if month == 12:
             year += 1
@@ -799,12 +848,15 @@ def main():
         else:
             month += 1
         russian_cumulative_inflation *= russian_monthly_inflation
-        russian_basic_cost *= russian_monthly_inflation
         if month == 3:
             global_max_med += 0.1
             global_gdp_med *= 1.03
         if month == 9:
             global_max_med += 0.1
+        russian_med_gdp = 0.0
+        for i in regs_dict.keys():
+            russian_med_gdp += regs_dict[i].gdp_per_person
+        russian_med_gdp /= len(regs_dict.keys())
         for i in regs_dict.keys():
             regs_dict[i].natural_growth()
             regs_dict[i].economy_growth()
