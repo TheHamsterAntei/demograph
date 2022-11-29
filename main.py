@@ -143,17 +143,17 @@ class Population:
                     continue
                 #Мужчины
                 elder_risk = max(0, k - 45 - medicine**0.7) * 0.0001 #Шанс умереть от болезней, связанных со старением
-                #Шанс умереть от несчастного случая наивысший в подростковом возрасте и в молодости
+                #Шанс умереть от несчастного случая/болезни наивысший в подростковом возрасте и в молодости
                 #Также этот эффект отражает шанс умереть младенцем
                 basic_risk = 0.0
                 if k == 0:
-                    basic_risk = 0.012 - max(0.0115, 0.0001 * medicine)
+                    basic_risk = 0.015 - max(0.0125, 0.0005 * medicine)
                 if 12 >= k > 0:
-                    basic_risk = 0.00009
+                    basic_risk = 0.005 - max(0.00491, 0.0001 * medicine)
                 if 28 > k > 12:
-                    basic_risk = 0.00014
+                    basic_risk = 0.0009 - max(0.00076, 0.00002 * medicine)
                 if k >= 28:
-                    basic_risk = 0.00009
+                    basic_risk = 0.0001
                 #Эффекты стабильности
                 stability_risk = 0.00001 + 0.001 * (1 - region_stability)
                 #Эффекты войны
@@ -197,13 +197,13 @@ class Population:
                 # Также этот эффект отражает шанс умереть младенцем
                 basic_risk = 0.0
                 if k == 0:
-                    basic_risk = 0.012 - max(0.0115, 0.0001 * medicine)
+                    basic_risk = 0.015 - max(0.0125, 0.0005 * medicine)
                 if 12 >= k > 0:
-                    basic_risk = 0.00009
+                    basic_risk = 0.005 - max(0.00491, 0.0001 * medicine)
                 if 28 > k > 12:
-                    basic_risk = 0.00011
+                    basic_risk = 0.0005 - max(0.0004, 0.00002 * medicine)
                 if k >= 28:
-                    basic_risk = 0.00006
+                    basic_risk = 0.0001
                 # Эффекты стабильности
                 stability_risk = 0.00001 + 0.001 * (1 - region_stability)
                 # Эффекты войны
