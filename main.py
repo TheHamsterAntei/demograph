@@ -9,11 +9,30 @@ from PIL import Image, ImageDraw, ImageFont
 #Технические:
 img = Image.open('Source.png').convert('RGB')
 img_blue_colors = [0 for i in range(0, 256)]
-for i in range(0, img.width):
-    for j in range(0, img.height):
+
+
+def earth_distance(s_lat, s_lng, e_lat, e_lng):
+   r = 6373.0
+   s_lat = s_lat*np.pi/180.0
+   s_lng = np.deg2rad(s_lng)
+   e_lat = np.deg2rad(e_lat)
+   e_lng = np.deg2rad(e_lng)
+   d = np.sin((e_lat - s_lat)/2)**2 + np.cos(s_lat)*np.cos(e_lat) * np.sin((e_lng - s_lng)/2)**2
+   return 2 * r * np.arcsin(np.sqrt(d))
+
+
+for i in range(0, 1770):
+    for j in range(38, img.height):
         t = img.getpixel((i, j))
         if t[0] == 0 and t[1] == 0:
-            img_blue_colors[t[2]] += 1
+            x = i
+            y = j - 38
+            mod_s = (earth_distance(18.938 + 0.107 * i, 80.76 - 0.08 * j,
+                                     18.938 + 0.107 * (i + 1), 80.76 - 0.08 * j) *
+                      earth_distance(18.938 + 0.107 * i, 80.76 - 0.08 * j,
+                                     18.938 + 0.107 * i, 80.76 - 0.08 * (j + 1))
+                      )
+            img_blue_colors[t[2]] += mod_s
 gif_russians = []
 gif_density = []
 gif_gdp = []
@@ -27,6 +46,8 @@ global_max_med = 10.0 #Максимальный уровень медицины 
 global_gdp_med = 300.0 #Средний ВВП на душу населения в развитых странах
 global_stability = 1.0 #Мировая стабильность
 global_openness = 1.0 #Мировая открытость
+global_building_technology = 1.0 #Мировые строительные технологии
+global_agro_technology = 1.0 #Мировые с/х технологии
 #Россия:
 russian_toleracy = 0.2 #Терпимость к меньшинствам
 russian_openness = 1.0 #Открытость границ
@@ -37,10 +58,14 @@ russian_humilation = 0.1 #Степень унижения русских/Рос�
 russian_unlabour = 90 #Возраст выхода на пенсию
 russian_child = 12 #Возраст, с которого разрешён труд
 russian_basic_cost = 5.0 #Базовая стоимость необходимых для жизни продуктов
-russian_monthly_inflation = 1.003 #Месячная инфляция в России
+russian_monthly_inflation = 1.001 #Месячная инфляция в России
 russian_cumulative_inflation = 1.0 #Общая инфляция с 1897-го года
 russian_social_politics = 0.01 #Показатель "социальности" политики России
 russian_med_gdp = 250
+
+#Политические проблемы России
+russian_agro_conflict = 0.5 #Разрешённость земельного вопроса
+russian_estates = True #Существует ли в России сословная система
 
 
 class Population:
@@ -260,6 +285,10 @@ class Population:
                     basic_chance *= 0.5
                 if region_hunger == 1:
                     basic_chance *= 0.3
+                if self.region.med_overpopulation > 1.0:
+                    basic_chance /= self.region.med_overpopulation
+                if self.region.agro_overpopulation > 1.0:
+                    basic_chance /= self.region.agro_overpopulation
                 basic_chance *= k_chance
                 basic_chance *= (region_stability + 0.3)**0.8
                 basic_chance *= 3 - (2.8 * (real_dt**0.3))
@@ -379,6 +408,9 @@ class Region:
         self.img_color = row[len(row) - 1]
         self.square = img_blue_colors[self.img_color]
 
+        #Природные параметры:
+        self.climate = row[10]
+
         #Экономические параметры:
         self.gdp_per_person = row[1]
         self.region_gdp = row[2]
@@ -403,6 +435,16 @@ class Region:
         self.hunger = 0 #Есть ли в регионе ГОЛОД
         self.product_dotation = 0 #Дотации на продукты для борьбы с голодом
 
+        #Параметры перенаселения
+        self.fact_town_pop = int(self.population * self.town_pop) #Численность городского населения
+        self.fact_agro_pop = self.population - self.fact_town_pop #Численность сельского населения
+        self.town_effective = self.square * global_building_technology * 1000
+        self.agro_effective = self.square * (self.climate ** 2) * 50 / global_agro_technology
+        self.agro_overpopulation = max(1.0, self.fact_agro_pop / self.agro_effective)
+        self.town_overpopulation = max(1.0, self.fact_town_pop / self.town_effective)
+        self.med_overpopulation = (self.agro_overpopulation * self.fact_agro_pop +
+                                   self.town_overpopulation * self.fact_town_pop) / self.population
+
         #Политические параметры:
         self.isrussian = 1
         self.iswar = 0 #Находится ли регион в составе государства, ведущего войну
@@ -421,9 +463,6 @@ class Region:
         self.conserv_power = 0.7 #Поддержка традиционных ценностей
         self.progress_power = 0.2 #Поддержка прогрессивных ценностей
 
-        #Природные параметры:
-        self.climate = row[10]
-
         # Параметры уровня жизни
         self.housing = int(0.9 * self.population)
         self.arenda = self.gdp_per_person * (self.population / self.housing) * 0.1
@@ -434,8 +473,24 @@ class Region:
         self.population_object.return_labour()
         self.unlaboured = 0 #Численность иждивенцев
 
+    def overpop(self):
+        #Проверка на перенаселение
+        self.fact_town_pop = int(self.population * self.town_pop)  # Численность городского населения
+        self.fact_agro_pop = self.population - self.fact_town_pop  # Численность сельского населения
+        self.town_effective = self.square * global_building_technology * 1000
+        self.agro_effective = self.square * (self.climate ** 2) * 50 / global_agro_technology * russian_agro_conflict
+        self.agro_overpopulation = max(1.0, self.fact_agro_pop / self.agro_effective)
+        self.town_overpopulation = max(1.0, self.fact_town_pop / self.town_effective)
+        self.med_overpopulation = (self.agro_overpopulation * self.fact_agro_pop +
+                                   self.town_overpopulation * self.fact_town_pop) / self.population
+        if self.agro_overpopulation > 1.0:
+            self.stability = max(0.0, self.stability - (self.agro_overpopulation - 1) * 0.02)
+        if self.town_overpopulation > 1.0:
+            self.stability = max(0.0, self.stability - (self.agro_overpopulation - 1) * 0.01)
+
     def natural_growth(self):
         #Снижение стабильности в случае голода
+        self.overpop()
         if self.stability < 1.0:
             self.stability = min(1.0, self.stability + 0.02)
         if self.hunger == 1:
@@ -489,14 +544,14 @@ class Region:
                 self.gdp_per_person += 0.1
                 self.gdp_per_person *= 1 + (self.governor_eff - 0.7) * 0.0001
         #Развитие благодаря инфраструктуре
-        self.gdp_per_person += (self.infrastructure - 1.0) / 2
-        self.gdp_per_person *= 1 + (self.infrastructure - 0.5) * 0.00002
+        self.gdp_per_person += max(0.0, (self.infrastructure - 1.0) / 2)
+        self.gdp_per_person *= 1 + self.infrastructure * 0.0001
         #Пересчёт стоимости жизни и благосостояния
         self.gdp_per_person = max(1.0, self.gdp_per_person)
         self.arenda = self.gdp_per_person * (self.population / self.housing) * (1 - self.stratification ** 2) * 0.25
-        self.product_cost = russian_basic_cost / self.infrastructure
-        gdp_life_k = min(1.0, self.gdp_per_person**1.4 / 200)
-        self.product_cost *= gdp_life_k
+        self.product_cost = self.med_overpopulation * russian_basic_cost / self.infrastructure
+        gdp_life_k = min(1.0, self.gdp_per_person / 100)
+        self.product_cost *= gdp_life_k ** 0.5
         self.product_cost = max(0.0, self.product_cost - self.product_dotation)
         self.life_cost = self.arenda + self.product_cost + self.product_cost * (self.unlaboured /
                                                                                 (self.population - self.unlaboured))
@@ -626,6 +681,17 @@ class Region:
         if self.literacy > 0.9:
             if self.town_pop < 0.8:
                 self.town_pop += 0.0001
+        if global_agro_technology > 2.0:
+            if self.town_pop < min(0.9, 0.1 + global_agro_technology * 0.06):
+                self.town_pop += 0.00004 * global_agro_technology
+        if self.agro_overpopulation > 1.0:
+            self.town_pop = min(1.0, self.town_pop + 0.001)
+            if self.agro_overpopulation > 1.2:
+                self.town_pop = min(1.0, self.town_pop + 0.001)
+                if self.agro_overpopulation > 1.5:
+                    self.town_pop = min(1.0, self.town_pop + 0.001)
+                    if self.agro_overpopulation > 2.0:
+                        self.town_pop = min(1.0, self.town_pop + 0.001)
         #Демографический переход
         if self.gdp_per_person > 200:
             if self.dem_transition_towns < 0.9:
@@ -646,6 +712,11 @@ class Region:
                 self.dem_transition_rural += 0.0002
             else:
                 self.dem_transition_rural = 1.0
+        if self.literacy > 0.7:
+            if self.dem_transition_towns < 0.7:
+                self.dem_transition_towns += 0.0002
+            if self.dem_transition_rural < 0.4:
+                self.dem_transition_rural += 0.0002
         if self.literacy > 0.95:
             if self.dem_transition_towns < 0.9:
                 self.dem_transition_towns += 0.0004
@@ -663,29 +734,78 @@ class Region:
         if month == 3:
             if self.infrastructure > 0.01:
                 self.infrastructure = max(0.01, self.infrastructure - 0.2 / self.climate)
+        max_infra = 1.0 + int(10 * global_building_technology ** 0.5) / 10
+        infra_build_eff = (global_building_technology ** 0.5) / (self.square ** 0.3)
         if self.gdp_per_person * self.governor_eff > 200:
-            if self.infrastructure < 0.5:
-                self.gdp_per_person -= 0.2
-                self.infrastructure += 0.1
+            if self.infrastructure < max_infra * 0.25:
+                self.gdp_per_person -= 0.2 / self.governor_eff
+                self.infrastructure += infra_build_eff * 2
         if self.gdp_per_person * self.governor_eff > 300:
-            if self.infrastructure < 1.0:
-                self.gdp_per_person -= 0.2
-                self.infrastructure += 0.07
+            if self.infrastructure < max_infra * 0.5:
+                self.gdp_per_person -= 0.2 / self.governor_eff
+                self.infrastructure += infra_build_eff * 1.6
         if self.gdp_per_person * self.governor_eff > 500:
-            if self.infrastructure < 1.5:
-                self.gdp_per_person -= 0.2
-                self.infrastructure += 0.05
+            if self.infrastructure < max_infra * 0.75:
+                self.gdp_per_person -= 0.2 / self.governor_eff
+                self.infrastructure += infra_build_eff * 1.2
         if self.gdp_per_person * self.governor_eff > 800:
-            if self.infrastructure < 2.0:
-                self.gdp_per_person -= 0.2
-                self.infrastructure = min(2.0, self.infrastructure + 0.04)
+            if self.infrastructure < max_infra:
+                self.gdp_per_person -= 0.2 / self.governor_eff
+                self.infrastructure = min(max_infra, self.infrastructure + infra_build_eff * 0.8)
         #Строительство жилья
         if month == 3:
             if self.housing > 0:
                 self.housing = max(0, int(self.housing * (0.998 - (3 - self.climate) * 0.0001)))
-        if self.housing < self.population:
-            self.housing += int(self.population * 0.001)
+        max_housing = (self.town_effective * self.town_pop) + (self.agro_effective * (1 - self.town_pop))
+        if self.housing < self.population and self.housing < self.town_effective:
+            self.housing = min(max_housing, self.housing + int(self.population * 0.001))
             self.gdp_per_person *= 0.9995
+
+    def political_effects(self):
+        if self.isrussian:
+            if russian_estates:
+                if self.stability > 0.5:
+                    self.stability -= 0.01
+            if russian_stability < self.stability:
+                self.stability -= 0.01
+            if russian_democracy < 0.3:
+                if np.random.choice([0, 1], p=(0.99995, 0.00005)) == 1:
+                    if russian_democracy <= 0.1:
+                        self.governor_eff = np.random.choice(
+                            a=[0.2, 0.3, 0.5, 0.8, 1.0, 1.2, 1.5],
+                            p=(0.01, 0.04, 0.10, 0.25, 0.40, 0.16, 0.04)
+                        )
+                    if 0.1 < russian_democracy <= 0.3:
+                        self.governor_eff = np.random.choice(
+                            a=[0.3, 0.5, 0.8, 1.0, 1.2, 1.5, 1.7],
+                            p=(0.04, 0.08, 0.12, 0.40, 0.24, 0.09, 0.03)
+                        )
+            else:
+                event = np.random.choice([0, 1, 2], p=(0.98298, 0.017, 0.00002))
+                if event == 1:
+                    if self.governor_eff > 1.1:
+                        if russian_democracy <= 0.7:
+                            if np.random.choice([0, 1], p=(0.6, 0.4)) == 1:
+                                self.governor_eff = np.random.choice(
+                                    a=[0.3, 0.5, 0.8, 1.0, 1.2, 1.5, 1.7],
+                                    p=(0.03, 0.07, 0.10, 0.40, 0.25, 0.10, 0.05)
+                                )
+                            else:
+                                if self.governor_eff < 2.0:
+                                    self.governor_eff = self.governor_eff + 0.1
+                        else:
+                            if np.random.choice([0, 1], p=(0.8, 0.2)) == 1:
+                                self.governor_eff = np.random.choice(
+                                    a=[0.3, 0.5, 0.8, 1.0, 1.2, 1.5, 1.7],
+                                    p=(0.03, 0.07, 0.10, 0.40, 0.25, 0.10, 0.05)
+                                )
+                            if self.governor_eff < 2.0:
+                                self.governor_eff = self.governor_eff + 0.1
+                if event == 2:
+                    self.governor_eff = np.random.choice(
+                        a=[0.3, 0.5, 0.8, 1.0, 1.2, 1.5, 1.7],
+                        p=(0.03, 0.07, 0.10, 0.40, 0.25, 0.10, 0.05)
+                    )
 
 
 def population_to_str(pop):
@@ -751,6 +871,79 @@ def ethnic_list(regs_dict):
     return nations_list
 
 
+def region_list(regs_dict):
+    regs_list = []
+    for i in regs_dict.keys():
+        regs_list.append((i, regs_dict[i].population))
+    regs_list.sort(key=lambda  x: -x[1])
+    return regs_list
+
+
+def history_sim(regs_dict):
+    global russian_monthly_inflation, russian_child, russian_democracy, russian_estates, russian_stability
+    global russian_agro_conflict, russian_basic_cost
+    #Эпоха монархии
+    if 1897 <= year < 1917:
+        #До русской революции
+        if year < 1905:
+            russian_stability += 0.001
+            if year == 1900 and month == 1:
+                russian_monthly_inflation -= 0.002
+            #Русско-японская война
+            if year == 1904 and month == 1:
+                russian_stability = 0.7
+                russian_monthly_inflation += 0.01
+        #Русская революция
+        if year == 1905:
+            russian_stability -= 0.005
+            russian_monthly_inflation += 0.002
+            if month == 1:
+                russian_basic_cost += 0.5
+        #Довоенный период
+        if 1905 < year < 1914:
+            #Столыпинская реформа
+            if year < 1911 or (year == 1911 and month <= 9):
+                russian_agro_conflict += 0.004
+                russian_stability += 0.002
+            if year == 1906 and month == 4:
+                russian_democracy = 0.2
+                russian_basic_cost -= 0.5
+                russian_monthly_inflation -= 0.005
+                russian_stability += 0.05
+            if year == 1910 and month == 1:
+                russian_basic_cost -= 0.2
+                russian_monthly_inflation -= 0.005
+            if year == 1913 and month == 1:
+                russian_basic_cost -= 0.1
+                russian_monthly_inflation -= 0.005
+                russian_stability += 0.01
+    #Революции и гражданская война
+    if 1917 <= year < 1921:
+        return
+    #Керенщина
+    if 1921 <= year < 1936:
+        return
+    #Предвоенная эпоха
+    if 1936 <= year < 1941:
+        return
+    #Второй Вельткриг
+    if 1941 <= year < 1946:
+        return
+    #Эпоха Савинкова
+    if 1946 <= year < 1959:
+        return
+    #Петровщина
+    if 1959 <= year < 1983:
+        return
+    #Бодровская оттепель
+    if 1983 <= year < 1993:
+        return
+    #Сытые девяностые
+    if 1993 <= year:
+        return
+
+
+
 def save_populi_image(regs_dict):
     global img_num
     dict_blues = {}
@@ -793,7 +986,7 @@ def save_populi_image(regs_dict):
                     red = max_in_reg[cur_reg][1][0]
                     green = max_in_reg[cur_reg][1][1]
                     blue = max_in_reg[cur_reg][1][2]
-                    bright = (max_in_reg[cur_reg][0] / max_pop)
+                    bright = ((max_in_reg[cur_reg][0] ** 0.5) / (max_pop ** 0.5))
                     if hunger[cur_reg]:
                         red = 220
                         green = 0
@@ -820,6 +1013,15 @@ def save_populi_image(regs_dict):
         draw.text((1773, pos), i[0] + ': ' + population_to_str(i[1]), font=fnt_small, fill=(gray, gray, gray))
         pos += 22
         gray += 7
+    regs_list = region_list(regs_dict)
+    pos = 379
+    gray = 0
+    for i in range(0, 11):
+        draw.text((1773, pos), str(i + 1) + '. ' + regs_list[i][0], font=fnt_small, fill=(gray, gray, gray))
+        draw.text((1773, pos + 20), 'Население: ' + population_to_str(regs_list[i][1]), font=fnt_small,
+                  fill=(gray + 50, gray + 50, gray + 50))
+        pos += 42
+        gray += 3
     draw.text((1773, 1), date_as_str(), font=fnt, fill=(0, 0, 0))
     img_density.save("Output/Population/Pop" + str(img_num) + '.png', 'PNG')
     img_num += 1
@@ -838,7 +1040,7 @@ def main():
         row = i[1].to_list()
         regs_dict[row[0]] = Region(nations, row)
     global month, year, global_gdp_med, global_max_med, russian_cumulative_inflation, russian_basic_cost
-    global russian_med_gdp
+    global russian_med_gdp, global_agro_technology, global_building_technology
     while year < 2001:
         if year + month != 1898:
             save_populi_image(regs_dict)
@@ -847,12 +1049,15 @@ def main():
             month = 1
         else:
             month += 1
+        history_sim(regs_dict)
         russian_cumulative_inflation *= russian_monthly_inflation
         if month == 3:
             global_max_med += 0.1
             global_gdp_med *= 1.03
         if month == 9:
             global_max_med += 0.1
+            global_agro_technology += 0.1
+            global_building_technology += 0.1
         russian_med_gdp = 0.0
         for i in regs_dict.keys():
             russian_med_gdp += regs_dict[i].gdp_per_person
@@ -862,41 +1067,6 @@ def main():
             regs_dict[i].economy_growth()
             regs_dict[i].literacy_and_medicine()
             regs_dict[i].urban()
-    #Ниже тесты рисования
-    sys.exit(0)
-    dict_blues = {}
-    for i in regs_dict.keys():
-        dict_blues[regs_dict[i].img_color] = i
-        max_dens = max(max_dens, regs_dict[i].pop_density)
-        max_gdp = max(max_gdp, regs_dict[i].region_gdp)
-    img_density = img.copy()
-    for x in range(0, img_density.width):
-        for y in range(0, img_density.height):
-            t = img_density.getpixel((x, y))
-            if t[0] == 0 and t[1] == 0:
-                if t[2] in dict_blues.keys():
-                    density = (regs_dict[dict_blues[t[2]]].pop_density)**0.5 / (max_dens)**0.5 * 255
-                    img_density.putpixel((x, y), (int(density * 0.8), 0, int(density * 0.4)))
-    img_density.save("Output//PopDens.png", 'PNG')
-    img_gdp = img.copy()
-    for x in range(0, img_gdp.width):
-        for y in range(0, img_gdp.height):
-            t = img_gdp.getpixel((x, y))
-            if t[0] == 0 and t[1] == 0:
-                if t[2] in dict_blues.keys():
-                    gdp = (regs_dict[dict_blues[t[2]]].region_gdp)**0.5 / (max_gdp)**0.5 * 255
-                    img_gdp.putpixel((x, y), (int(gdp * 0.8), 0, int(gdp * 0.4)))
-    img_gdp.save("Output//GDP.png", 'PNG')
-    img_russians = img.copy()
-    for x in range(0, img_russians.width):
-        for y in range(0, img_russians.height):
-            t = img_russians.getpixel((x, y))
-            if t[0] == 0 and t[1] == 0:
-                if t[2] in dict_blues.keys():
-                    russians = (regs_dict[dict_blues[t[2]]].population_object.pop_by_nations['Русские'] /
-                                regs_dict[dict_blues[t[2]]].population * 255)
-                    img_russians.putpixel((x, y), (int(russians * 0.8), 0, int(russians * 0.4)))
-    img_russians.save("Output//Russians.png", 'PNG')
 
 if __name__ == '__main__':
     main()
