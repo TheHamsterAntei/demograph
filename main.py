@@ -1005,7 +1005,6 @@ class Region:
 
         labour = self.region_gdp / self.gdp_per_person
         self.gdp_per_person = (self.region_gdp - spent) / labour
-        print(self.name + ': ' + str(max_infra) + ', ' + str(self.infrastructure))
         #Строительство жилья
         if month == 3:
             if self.housing > 0:
@@ -1466,6 +1465,7 @@ def main():
             regs_dict[i].economy_growth()
             regs_dict[i].literacy_and_medicine()
             regs_dict[i].urban()
+            regs_dict[i].building()
 
 if __name__ == '__main__':
     main()
