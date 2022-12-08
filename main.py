@@ -38,12 +38,19 @@ gif_density = []
 gif_gdp = []
 gif_towners = []
 assim_data = pd.read_excel('NationAssimTable.xlsx', index_col='Index')
-img_num = 1 #Номер изображения
+img_num = {
+    'nations': 0,
+    'infra': 0,
+    'poverty': 0,
+    'literacy': 0,
+    'gdp': 0,
+    'urban': 0
+} #Номер изображения
 #Мир:
 year = 1897
 month = 1
 global_max_med = 10.0 #Максимальный уровень медицины в мире
-global_gdp_med = 300.0 #Средний ВВП на душу населения в развитых странах
+global_gdp_med = 400.0 #Средний ВВП на душу населения в развитых странах
 global_stability = 1.0 #Мировая стабильность
 global_openness = 1.0 #Мировая открытость
 global_building_technology = 1.0 #Мировые строительные технологии
@@ -85,9 +92,9 @@ class Population:
                     self.pop_by_nations[nations[i]].append([0.0, 0.0])
                 continue
             age_weight = [15]
-            for k in range(1, 80):
-                age_weight.append(age_weight[k - 1] * (0.997 - 0.002 * k - 0.01 * max(0, k - 40)
-                                                       - 0.02 * max(0, k - 60)))
+            for k in range(1, 120):
+                age_weight.append(age_weight[k - 1] * (0.998 - 0.0005 * k - 0.001 * max(0, k - 40)
+                                                       - 0.005 * max(0, k - 60)))
             total_weights = sum(age_weight)
             for k in age_weight:
                 p = k / total_weights
@@ -197,11 +204,11 @@ class Population:
                 # Также этот эффект отражает шанс умереть младенцем
                 basic_risk = 0.0
                 if k == 0:
-                    basic_risk = 0.015 - max(0.0125, 0.0005 * medicine)
+                    basic_risk = 0.02 - max(0.0175, 0.0005 * medicine)
                 if 12 >= k > 0:
-                    basic_risk = 0.005 - max(0.00491, 0.0001 * medicine)
+                    basic_risk = 0.004 - max(0.00391, 0.0001 * medicine)
                 if 28 > k > 12:
-                    basic_risk = 0.0005 - max(0.0004, 0.00002 * medicine)
+                    basic_risk = 0.001 - max(0.0009, 0.00005 * medicine)
                 if k >= 28:
                     basic_risk = 0.0001
                 # Эффекты стабильности
@@ -401,6 +408,23 @@ class Population:
         return int(gdp * gdp_k)
 
 
+class State:
+    def __init__(self):
+        #Параметры государства
+        self.toleracy = 0.2  #Терпимость к меньшинствам
+        self.openness = 1.0  #Открытость границ
+        self.stability = 0.8  #Стабильность в стране
+        self.democracy = 0.0  #Демократичность режима
+        self.unlabour = 90  # Возраст выхода на пенсию
+        self.child = 12  # Возраст, с которого разрешён труд
+        self.basic_cost = 5.0  # Базовая стоимость необходимых для жизни продуктов
+        self.monthly_inflation = 1.001  # Месячная инфляция
+        self.social_politics = 0.01  # Показатель "социальности" политики
+        self.med_gdp = 250
+
+        #Список регионов
+        self.regions = {}
+
 class Region:
     def __init__(self, nations, row):
         #Неизменяемые параметры:
@@ -418,6 +442,8 @@ class Region:
         self.life_cost = row[4]
         self.stratification = row[5] * 0.01
         self.infrastructure = row[6]
+        self.industry = 0.0 #Уровень индустриализации
+        self.postindustry = 0.0 #Уровень сферы услуг
 
         #Демографические параметры:
         self.population = row[11]
@@ -447,12 +473,14 @@ class Region:
 
         #Политические параметры:
         self.isrussian = 1
+        self.state = None
         self.iswar = 0 #Находится ли регион в составе государства, ведущего войну
         self.openness = 0.6
         self.governor_eff = 1
         self.stability = 1
         self.state_nation = 'Русские'
         self.assimilation = 0.4
+        self.industry_efforts = 0.0 #Усилия по индустриализации
         self.monarch_power = 0.5 #Поддержка монархии
         self.autocrat_power = 0.5 #Поддержка авторитаризма
         self.democracy_power = 0.3 #Поддержка демократии
@@ -498,79 +526,164 @@ class Region:
                 self.stability -= 0.05
         self.gdp_per_person = max(1.0, self.gdp_per_person)
         self.population_object.natural_growth()
+        self.pop_density = self.population / self.square
 
     def economy_growth(self):
-        #Базовое развитие (зависит от наличия инфляции)
+        #Эффективность труда (изменяется в пределах от -3% до +3% в месяц
+        mod = 0.0
+        #Базовое развитие (зависит от наличия инфляции) (мин - -0.5, макс - 0.1)
         if self.isrussian == 1:
-            if russian_monthly_inflation > 1.0:
-                self.gdp_per_person *= max(1.0004, 1.005 / russian_monthly_inflation)
+            inflation = russian_monthly_inflation
         else:
-            self.gdp_per_person *= 1.001
-        #Догоняющее развитие
+            inflation = self.state.monthly_inflation
+        if 1.005 > inflation >= 1.0:
+            mod += 0.1
+        else:
+            if inflation < 1.0:
+                mod -= 0.1
+            else:
+                if inflation >= 1.005:
+                    mod -= 0.1
+                    if inflation > 1.01:
+                        mod -= 0.1
+                        if inflation > 1.03:
+                            mod -= 0.1
+                            if inflation > 1.1:
+                                mod -= 0.1
+                                if inflation > 1.2:
+                                    mod -= 0.1
+
+        #Развитие благодаря открытости и инвестициям (мин - 0, макс - 0.3)
         if self.isrussian == 1:
-            if self.gdp_per_person * 2 / (0.1 + russian_openness * 0.9) < global_gdp_med:
-                self.gdp_per_person += 0.25
-            self.gdp_per_person += 0.05 * russian_med_gdp / self.gdp_per_person
+            openness = russian_openness
         else:
-            if self.gdp_per_person * 2 < global_gdp_med:
-                self.gdp_per_person += 0.25
-            self.gdp_per_person += 0.02
-        #Развитие благодаря урбанизации
+            openness = self.state.openness
+        if self.gdp_per_person < global_gdp_med * 0.8 and inflation < 1.01:
+            mod += 0.1 * openness / inflation
+            if self.gdp_per_person < global_gdp_med * 0.5 and inflation < 1.008:
+                mod += 0.1 * openness / inflation
+                if self.gdp_per_person < global_gdp_med * 0.2 and inflation < 1.006:
+                    mod += 0.1 * openness / inflation
+
+
+        #Развитие благодаря урбанизации (мин - 0, макс - 0.3)
         self.gdp_per_person *= 1 + 0.0005 * self.town_pop
-        #Развитие благодаря грамотности
-        if self.literacy < 0.1:
-            self.gdp_per_person = min(200, self.gdp_per_person)
+        if self.town_pop > 0.3:
+            mod += 0.1
+            if self.town_pop > 0.5:
+                mod += 0.1
+                if self.town_pop > 0.7:
+                    mod += 0.1
+
+        #Развитие благодаря грамотности (мин - -0.3, макс - 0.4)
+        if self.literacy < 0.2:
+            mod -= 0.1
+            if self.literacy < 0.1:
+                mod -= 0.1
+                if self.literacy < 0.05:
+                    mod -= 0.1
         else:
-            if self.literacy < 0.5:
-                self.gdp_per_person = min(500, self.gdp_per_person)
-                if self.gdp_per_person < 100:
-                    self.gdp_per_person += 0.1
+            if self.literacy > 0.5:
+                mod += 0.1
+                if self.literacy > 0.9:
+                    mod += 0.1
+            if self.education_quality > 5.0:
+                mod += 0.1
+                if self.education_quality > 9.0:
+                    mod += 0.1
+
+        #Развитие благодаря переходным эффектам экономики
+        i_value = (self.industry_efforts * self.town_pop) * calculate_basic_value(self.industry)
+        self.industry += i_value
+
+        if self.industry < 0.2:
+            mod += 30 * i_value
+        else:
+            if self.industry < 0.4:
+                mod += 40 * i_value
             else:
-                if self.literacy < 0.9:
-                    if self.gdp_per_person < 150:
-                        self.gdp_per_person += 0.2
-                    self.gdp_per_person *= 1 + 0.0003
+                if self.industry < 0.6:
+                    mod += 50 * i_value
                 else:
-                    if self.gdp_per_person < 200:
-                        self.gdp_per_person += 0.25
-                    self.gdp_per_person *= 1 + 0.0005
-        #Развитие благодаря эффективности губернатора
-        if self.governor_eff < 0.5:
-            self.gdp_per_person *= 0.9998
-        else:
-            if 0.5 <= self.governor_eff < 0.9:
-                self.gdp_per_person *= 1 + (self.governor_eff - 0.7) * 0.0001
+                    if self.industry < 0.95:
+                        mod += 60 * i_value
+
+        if year >= 1960:
+            pi_value = (self.industry * self.town_pop * min(0.0, max(1.0, self.person_prosperity / 500))) * \
+                       calculate_basic_value(self.postindustry)
+            self.postindustry += pi_value
+
+            if self.postindustry < 0.3:
+                mod += 10 * pi_value
             else:
-                self.gdp_per_person += 0.1
-                self.gdp_per_person *= 1 + (self.governor_eff - 0.7) * 0.0001
+                if self.postindustry < 0.6:
+                    mod += 15 * pi_value
+                else:
+                    if self.postindustry < 0.95:
+                        mod += 20 * pi_value
+
+        #Развитие благодаря эффективности губернатора (мин - -0.1, макс - 0.2)
+        if self.governor_eff < 0.6:
+            mod -= 0.1
+        else:
+            if self.governor_eff >= 1.0:
+                mod += 0.1
+                if self.governor_eff >= 1.5:
+                    mod += 0.1
+
         #Развитие благодаря инфраструктуре
-        self.gdp_per_person += max(0.0, (self.infrastructure - 1.0) / 2)
-        self.gdp_per_person *= 1 + self.infrastructure * 0.0001
+        if self.infrastructure < 0.3:
+            mod -= 0.1
+        else:
+            if self.infrastructure >1.0:
+                mod += 0.1
+                if self.infrastructure > 3.0:
+                    mod += 0.1
+                    if self.infrastructure > 5.0:
+                        mod += 0.1
+                        if self.infrastructure > 7.0:
+                            mod += 0.1
+        if self.infrastructure > (1.0 + int(10 * global_building_technology ** 0.5) / 10) * 0.7:
+            mod += 0.1
+
+        #Итоговый подсчёт
+        if mod > 0:
+            value = 1 + 3 * calculate_basic_value(1 - max(1.0, mod / 5))
+        else:
+            value = 1 - 3 * calculate_basic_value(1 - max(1.0, abs(mod) / 5))
+
+        self.gdp_per_person *= value
+
         #Пересчёт стоимости жизни и благосостояния
         self.gdp_per_person = max(1.0, self.gdp_per_person)
-        self.arenda = self.gdp_per_person * (self.population / self.housing) * (1 - self.stratification ** 2) * 0.25
+        self.arenda = 10 * (russian_basic_cost * (self.population / self.housing) * self.infrastructure *
+                       (global_gdp_med / self.gdp_per_person) * (self.medicine_quality / global_max_med) *
+                       (self.education_quality / 5) ** 0.5 * (1 - self.stratification))
         self.product_cost = self.med_overpopulation * russian_basic_cost / self.infrastructure
-        gdp_life_k = min(1.0, self.gdp_per_person / 100)
-        self.product_cost *= gdp_life_k ** 0.5
+        gdp_life_k = min(1.0, self.gdp_per_person / global_gdp_med)
+        self.product_cost *= gdp_life_k
         self.product_cost = max(0.0, self.product_cost - self.product_dotation)
+        if self.pop_density < 5:
+            cost_mod = 1 - self.pop_density / 5
+            self.product_cost *= cost_mod
         self.life_cost = self.arenda + self.product_cost + self.product_cost * (self.unlaboured /
                                                                                 (self.population - self.unlaboured))
         self.life_cost *= russian_monthly_inflation ** 0.5
-        if self.population < 150000:
-            self.life_cost = 0
-            self.arenda = 0
-            self.product_cost = 0
-        self.person_prosperity = (0.5 * self.gdp_per_person + (0.5 * self.gdp_per_person * self.stratification) -
-                                  self.life_cost)
-        s = max(0.01, self.stratification)
-        self.poverty = ((self.life_cost / (0.01 * self.gdp_per_person * (1 + s)) -
-                         (1 - s) * 50) / s)
+        s = min(1.0, max(0.0, self.stratification))
+        if s != 0.0:
+            prosperity_median = (s - 1 - (1 + s**2)**0.5) / 2 * s
+        else:
+            prosperity_median = 0.5
+        self.person_prosperity = (0.5 * self.gdp_per_person * prosperity_median - self.life_cost)
+        g = self.gdp_per_person
+        l = self.life_cost * 4
+        self.poverty = 100 * (l / g)
         if self.poverty > 99.9:
             self.poverty = 99.9
         if self.poverty < 0:
             self.poverty = 0
-        self.hungry_poverty = (((self.life_cost - self.arenda) / (0.01 * self.gdp_per_person * (1 + s)) -
-                                (1 - s) * 50) / s)
+        l = (self.life_cost - self.arenda) * 0.25
+        self.hungry_poverty = 100 * (l / g)
         if self.hungry_poverty > 99.9:
             self.hungry_poverty = 99.9
         if self.hungry_poverty < 0:
@@ -579,187 +692,339 @@ class Region:
             self.hunger = 1
         if self.hungry_poverty < 7.0:
             self.hunger = 0
-        if self.poverty < 10:
-            if self.stratification < 0.9:
-                self.stratification += 0.004
-        if self.poverty > 70:
-            if self.stratification < 0.4:
-                self.stratification += 0.002
         #Стратификация и социальная политика
+        value_plus = calculate_basic_value(self.stratification)
+        value_minus = calculate_basic_value(1 - self.stratification)
+        mod = 0.0
+
+        if self.poverty < 10:
+            mod += 0.1
+        if self.poverty > 70:
+            mod += 0.1
+            if self.poverty > 90:
+                mod += 0.1
         if self.hungry_poverty > 5:
-            if self.stratification < 0.4:
-                self.stratification += 0.002
+            mod += 0.1
             if self.hungry_poverty > 10:
                 if self.gdp_per_person > 5.0:
                     self.gdp_per_person -= 0.5
                     self.product_dotation += 1.0
-                    self.stratification = max(0.0, self.stratification - 0.009)
             if self.hungry_poverty > 30:
-                if self.stratification < 0.7:
-                    self.stratification = self.stratification + 0.004
+                mod += 0.1
         else:
-            if self.product_dotation > 0:
+            if self.product_dotation > 0.0:
                 self.gdp_per_person += min(0.25, self.product_dotation) * 0.2
                 self.product_dotation = max(0.0, self.product_dotation - 0.25)
-        self.stratification = min(1.0, self.stratification + (1 - russian_monthly_inflation ** 0.3))
-        self.stratification = max(0.0, self.stratification - russian_social_politics * 0.1)
+        if self.product_dotation > 0.0:
+            mod -= 0.1
+            if self.product_dotation > 3.0:
+                mod -= 0.1
+                if self.product_dotation > 5.0:
+                    mod -= 0.1
+        if russian_monthly_inflation > 1.005:
+            mod += 0.1
+        if russian_monthly_inflation < 1.0:
+            mod += 0.1
+        if self.isrussian == 1:
+            soc_pol = russian_social_politics
+        else:
+            soc_pol = self.state.social_politics
+        mod -= soc_pol * 5
+
+        if mod > 0:
+            self.stratification += mod * value_plus
+        if mod < 0:
+            self.stratification -= mod * value_minus
         #Итоговый подсчёт
         self.gdp_per_person = max(1.0, self.gdp_per_person)
         self.region_gdp = self.population_object.return_labour()
 
     def literacy_and_medicine(self):
-        if self.literacy < 1:
-            #Рост грамотности от урбанизации
-            if self.town_pop > 0.45:
-                if self.literacy < 0.5:
-                    self.literacy += 0.001
-                else:
-                    self.literacy += 0.0002
-            #Рост грамотности от качества образования
-            if self.education_quality > 1.0:
-                self.literacy += 0.001
-            if self.education_quality > 5.0:
-                self.literacy += 0.002
-            if self.education_quality > 9.0:
-                self.literacy += 0.002
-            #Рост грамотности от ВВП
-            if self.gdp_per_person > 300:
-                self.literacy += 0.001
-        else:
-            self.literacy = 1.0
-        #Медицина
+        #Грамотность
+        value_plus = calculate_basic_value(self.literacy)
+        value_minus = calculate_basic_value(1 - self.literacy)
+        mod = 0.0
+        #Рост грамотности от урбанизации
+        if self.town_pop > 0.4:
+            mod += 0.1
+            if self.town_pop > 0.9:
+                mod += 0.1
+        if self.education_quality > 1.0:
+            mod += 0.1
+            if self.education_quality > 3.0:
+                mod += 0.1
+                if self.education_quality > 5.0:
+                    mod += 0.1
+        if self.gdp_per_person > 200:
+            mod += 0.1
+            if self.gdp_per_person > 500:
+                mod += 0.1
+        if self.poverty < 30:
+            mod += 0.1
+            if self.poverty < 10:
+                mod += 0.1
         if self.literacy < 0.1:
-            if self.medicine_quality > 0.1:
-                self.medicine_quality -= 0.025
-            else:
-                self.medicine_quality = 0.1
-        else:
-            if self.literacy < 0.5:
-                if self.medicine_quality > 10.0:
-                    self.medicine_quality -= 0.05
-            else:
-                if self.education_quality > 3.0:
-                    if self.medicine_quality * 2 < global_max_med:
-                        self.medicine_quality += 0.025
-                if self.education_quality > 6.0:
-                    if self.medicine_quality * 1.2 < global_max_med:
-                        self.medicine_quality += 0.025
-                if self.education_quality > 8.5:
-                    if self.medicine_quality < global_max_med:
-                        self.medicine_quality += 0.01
-                    else:
-                        self.medicine_quality = global_max_med
+            mod += 0.1
+
+        if self.town_pop < 0.1:
+            mod -= 0.1
+        if self.gdp_per_person < 50:
+            mod -= 0.1
+        if self.hunger == 1 or self.iswar == 1:
+            mod -= 0.1
+        if self.literacy > 0.95:
+            mod -= 0.1
+
+        if mod > 0:
+            self.literacy += value_plus * mod
+        if mod < 0:
+            self.literacy += value_minus * mod
+
+        #Медицина
+        value_plus = global_max_med * calculate_basic_value(self.medicine_quality / global_max_med)
+        value_minus = global_max_med * calculate_basic_value(1 - (self.medicine_quality / global_max_med))
+        mod = 0.0
+
+        if self.literacy > 0.9:
+            mod += 0.1
+        if self.education_quality > 1.0:
+            mod += 0.1
+            if self.education_quality > 2.5:
+                mod += 0.1
+                if self.education_quality > 5.0:
+                    mod += 0.1
+                    if self.education_quality > 8.0:
+                        mod += 0.1
+                        if self.education_quality > 9.5:
+                            mod += 0.1
+        if self.gdp_per_person > global_gdp_med:
+            mod += 0.1
+            if self.gdp_per_person > global_gdp_med * 2:
+                mod += 0.1
+        if self.town_pop > 0.6:
+            mod += 0.1
+        if self.person_prosperity > 300:
+            mod += 0.1
+
+        if self.literacy < 0.1:
+            mod -= 0.1
+        if self.education_quality < 0.5:
+            mod -= 0.1
+        if self.person_prosperity < 0:
+            mod -= 0.1
+
+        if mod > 0:
+            self.medicine_quality += value_plus * mod
+        if mod < 0:
+            self.medicine_quality += value_minus * mod
+
         #Качество образования
-        if month == 6:
-            self.education_quality -= 0.1
-        if self.gdp_per_person * 0.9 > global_gdp_med:
-            if self.education_quality < 10.0:
-                self.education_quality += 0.02
-            else:
-                self.education_quality = 10.0
-        if self.gdp_per_person * 1.2 > global_gdp_med:
-            if self.education_quality < 9.0:
-                self.education_quality += 0.02
-        if self.gdp_per_person * 1.5 > global_gdp_med:
-            if self.education_quality < 5.0:
-                self.education_quality += 0.02
-        if self.gdp_per_person * 2.0 > global_gdp_med:
-            if self.education_quality < 2.0:
-                self.education_quality += 0.02
-        if self.gdp_per_person * 3.0 > global_gdp_med:
-            if self.education_quality < 1.0:
-                self.education_quality += 0.02
+        value_plus = 10 * calculate_basic_value(self.education_quality / 10)
+        value_minus = 10 * calculate_basic_value(1 - (self.education_quality / 10))
+        mod = -0.2
+
+        if self.gdp_per_person > global_gdp_med * 0.5:
+            mod += 0.1
+            if self.gdp_per_person > global_gdp_med * 0.8:
+                mod += 0.1
+                if self.gdp_per_person > global_gdp_med:
+                    mod += 0.1
+                    if self.gdp_per_person > global_gdp_med * 1.4:
+                        mod += 0.1
+                        if self.gdp_per_person > global_gdp_med * 1.7:
+                            mod += 0.1
+        if self.town_pop > 0.4:
+            mod += 0.1
+            if self.town_pop > 0.7:
+                mod += 0.1
+        if self.literacy > 0.9:
+            mod += 0.1
+        if self.person_prosperity > 300:
+            mod += 0.1
+            if self.person_prosperity > 500:
+                mod += 0.1
+
+        if self.gdp_per_person < global_gdp_med * 0.1:
+            mod -= 0.1
+        if self.literacy < 0.1:
+            mod -= 0.1
+        if self.person_prosperity < 0:
+            mod -= 0.1
+
+        if mod > 0:
+            self.education_quality += value_plus * mod
+        if mod < 0:
+            self.education_quality += value_minus * mod
 
     def urban(self):
-        #Рост урбанизации
+        # Рост урбанизации
+        s_value_plus = calculate_basic_value(self.town_pop)
+        s_value_minus = calculate_basic_value(1 - self.town_pop)
+        mod = 0.0
+
         if self.gdp_per_person > 100:
-            if self.town_pop < 0.5:
-                self.town_pop += 0.0001
-        if self.gdp_per_person > 500:
-            if self.town_pop < 0.7:
-                self.town_pop += 0.0001
-        if self.literacy > 0.9:
-            if self.town_pop < 0.8:
-                self.town_pop += 0.0001
+            mod += 0.1
+            if self.gdp_per_person > 500:
+                mod += 0.1
+            if self.literacy > 0.3:
+                mod += 0.1
+        if self.town_pop < 0.4:
+            if self.literacy > 0.5:
+                mod += 0.1
+                if self.literacy > 0.9:
+                    mod += 0.1
+        else:
+            if self.literacy > 0.8:
+                mod += 0.1
         if global_agro_technology > 2.0:
-            if self.town_pop < min(0.9, 0.1 + global_agro_technology * 0.06):
-                self.town_pop += 0.00004 * global_agro_technology
-        if self.agro_overpopulation > 1.0:
-            self.town_pop = min(1.0, self.town_pop + 0.001)
+            mod += 0.1
             if self.agro_overpopulation > 1.2:
-                self.town_pop = min(1.0, self.town_pop + 0.001)
-                if self.agro_overpopulation > 1.5:
-                    self.town_pop = min(1.0, self.town_pop + 0.001)
-                    if self.agro_overpopulation > 2.0:
-                        self.town_pop = min(1.0, self.town_pop + 0.001)
-        #Демографический переход
-        if self.gdp_per_person > 200:
-            if self.dem_transition_towns < 0.9:
-                self.dem_transition_towns += 0.001
-            if self.dem_transition_rural < 0.2:
-                self.dem_transition_rural += 0.001
-        if self.gdp_per_person > 1000:
-            if self.dem_transition_towns < 0.95:
-                self.dem_transition_towns += 0.0004
-            if self.dem_transition_rural < 0.8:
-                self.dem_transition_rural += 0.0005
-        if self.gdp_per_person > 2000:
-            if self.dem_transition_towns < 1.0:
-                self.dem_transition_towns += 0.0002
-            else:
-                self.dem_transition_towns = 1.0
-            if self.dem_transition_rural < 1.0:
-                self.dem_transition_rural += 0.0002
-            else:
-                self.dem_transition_rural = 1.0
-        if self.literacy > 0.7:
-            if self.dem_transition_towns < 0.7:
-                self.dem_transition_towns += 0.0002
-            if self.dem_transition_rural < 0.4:
-                self.dem_transition_rural += 0.0002
-        if self.literacy > 0.95:
-            if self.dem_transition_towns < 0.9:
-                self.dem_transition_towns += 0.0004
-            if self.dem_transition_rural < 0.5:
-                self.dem_transition_rural += 0.0005
-        if self.town_pop > 0.3:
-            if self.dem_transition_rural < 0.3:
-                self.dem_transition_rural += 0.0004
+                mod += 0.1
+        if self.agro_overpopulation > 1.0:
+            mod += 0.1
+            if self.agro_overpopulation > 1.4:
+                mod += 0.1
+                if self.agro_overpopulation > 1.8:
+                    mod += 0.1
+
+        if self.hunger == 1:
+            mod -= 0.1
+        if self.climate > 1.5:
+            mod -= 0.1
+        if self.housing < self.population * 0.8:
+            mod -= 0.1
+        if self.poverty > 0.4:
+            mod -= 0.1
+            if self.poverty > 0.8:
+                mod -= 0.1
+
+        if mod > 0:
+            self.town_pop += s_value_plus * mod
+        if mod < 0:
+            self.town_pop += s_value_minus * mod
+
+        #Демографический переход городской
+        dtt_plus_value = calculate_basic_value(self.dem_transition_towns)
+        dtt_minus_value = calculate_basic_value(1 - self.dem_transition_towns)
+        mod = 0
+        if self.gdp_per_person > 150:
+            mod += 0.1
+            if self.gdp_per_person > 500:
+                mod += 0.1
+                if self.gdp_per_person > 2000:
+                    mod += 0.1
+            if self.literacy > 0.8:
+                mod += 0.1
         if self.town_pop > 0.5:
-            if self.dem_transition_rural < self.dem_transition_towns:
-                self.dem_transition_rural += 0.001
+            mod += 0.1
+            if self.town_pop > 0.8:
+                mod += 0.1
+        if self.medicine_quality > 5.0:
+            mod += 0.1
+            if self.medicine_quality > 12.0:
+                mod += 0.1
+        if self.person_prosperity > 100:
+            mod += 0.1
+            if self.person_prosperity > 300:
+                mod += 0.1
+
+        if self.hunger == 1:
+            mod -= 0.1
+        if self.poverty > 0.5:
+            mod -= 0.1
+            if self.poverty > 0.8:
+                mod -= 0.1
+        if self.literacy < 0.2:
+            mod -= 0.1
+
+        if mod > 0:
+            self.dem_transition_towns += dtt_plus_value * mod
+        if mod < 0:
+            self.dem_transition_towns += dtt_minus_value * mod
+
+        #Демографический переход в деревне
+        dtr_plus_value = self.dem_transition_towns * calculate_basic_value(self.dem_transition_rural)
+        dtr_minus_value = self.dem_transition_towns * calculate_basic_value(1 - self.dem_transition_rural)
+        mod = 0
+        if self.gdp_per_person > 200:
+            mod += 0.1
+            if self.gdp_per_person > 1000:
+                mod += 0.1
+            if self.town_pop > 0.4:
+                mod += 0.1
+                if self.town_pop > 0.6:
+                    mod += 0.1
+        if self.medicine_quality > 7.0:
+            mod += 0.1
+            if self.medicine_quality > 15.0:
+                mod += 0.1
+        if self.person_prosperity > 50:
+            mod += 0.1
+            if self.person_prosperity > 120:
+                mod += 0.1
+                if self.education_quality > 3.0:
+                    mod += 0.1
+        if self.agro_overpopulation > 1.0:
+            mod += 0.1
+
+        if self.hunger == 1:
+            mod -= 0.1
+        if self.poverty > 0.6:
+            mod -= 0.1
+        if self.literacy < 0.2:
+            mod -= 0.1
+
+        if mod > 0:
+            self.dem_transition_rural += dtr_plus_value * mod
+        if mod < 0:
+            self.dem_transition_rural += dtr_minus_value * mod
+
 
     def building(self):
         #Изменение инфраструктуры
-        if month == 3:
-            if self.infrastructure > 0.01:
-                self.infrastructure = max(0.01, self.infrastructure - 0.2 / self.climate)
         max_infra = 1.0 + int(10 * global_building_technology ** 0.5) / 10
+        value_plus = max_infra * calculate_basic_value(self.infrastructure / max_infra)
+        value_minus = max_infra * calculate_basic_value(1 - (self.infrastructure / max_infra))
+        mod = 0.0
+
+        if month == 3:
+            mod -= 0.1 + 0.1 / self.climate
+
+        spent = 0.0
         infra_build_eff = (global_building_technology ** 0.5) / (self.square ** 0.3)
-        if self.gdp_per_person * self.governor_eff > 200:
-            if self.infrastructure < max_infra * 0.25:
-                self.gdp_per_person -= 0.2 / self.governor_eff
-                self.infrastructure += infra_build_eff * 2
-        if self.gdp_per_person * self.governor_eff > 300:
-            if self.infrastructure < max_infra * 0.5:
-                self.gdp_per_person -= 0.2 / self.governor_eff
-                self.infrastructure += infra_build_eff * 1.6
-        if self.gdp_per_person * self.governor_eff > 500:
-            if self.infrastructure < max_infra * 0.75:
-                self.gdp_per_person -= 0.2 / self.governor_eff
-                self.infrastructure += infra_build_eff * 1.2
-        if self.gdp_per_person * self.governor_eff > 800:
-            if self.infrastructure < max_infra:
-                self.gdp_per_person -= 0.2 / self.governor_eff
-                self.infrastructure = min(max_infra, self.infrastructure + infra_build_eff * 0.8)
+        for cnt in range(1, 11):
+            if self.infrastructure < max_infra * 0.1 * cnt:
+                if self.region_gdp * self.governor_eff > 1000000 * cnt * (1 + cnt) / 2:
+                    mod += 0.1 * infra_build_eff
+                    spent += cnt * 10 / self.governor_eff
+
+        if mod > 0:
+            self.infrastructure += mod * value_plus
+        if mod < 0:
+            self.infrastructure += mod * value_minus
+
+        labour = self.region_gdp / self.gdp_per_person
+        self.gdp_per_person = (self.region_gdp - spent) / labour
+        print(self.name + ': ' + str(max_infra) + ', ' + str(self.infrastructure))
         #Строительство жилья
         if month == 3:
             if self.housing > 0:
-                self.housing = max(0, int(self.housing * (0.998 - (3 - self.climate) * 0.0001)))
+                self.housing = max(0, int(self.housing * (0.9998 - (3 - self.climate) * 0.0001)))
         max_housing = (self.town_effective * self.town_pop) + (self.agro_effective * (1 - self.town_pop))
-        if self.housing < self.population and self.housing < self.town_effective:
-            self.housing = min(max_housing, self.housing + int(self.population * 0.001))
-            self.gdp_per_person *= 0.9995
+        if self.housing < self.population and self.housing < max_housing:
+            if self.region_gdp <= 10000000:
+                self.housing = min(max_housing, self.housing + int(self.population * 0.0002))
+            else:
+                if self.region_gdp <= 50000000:
+                    self.housing = min(max_housing, self.housing + int(self.population * 0.0005))
+                    self.gdp_per_person = (self.region_gdp - 1250) / labour
+                else:
+                    if self.region_gdp <= 250000000:
+                        self.housing = min(max_housing, self.housing + int(self.population * 0.001))
+                        self.gdp_per_person = (self.region_gdp - 2500) / labour
+                    else:
+                        self.housing = min(max_housing, self.housing + int(self.population * 0.002))
+                        self.gdp_per_person = (self.region_gdp - 5000) / labour
 
     def political_effects(self):
         if self.isrussian:
@@ -806,6 +1071,11 @@ class Region:
                         a=[0.3, 0.5, 0.8, 1.0, 1.2, 1.5, 1.7],
                         p=(0.03, 0.07, 0.10, 0.40, 0.25, 0.10, 0.05)
                     )
+
+
+def calculate_basic_value(x_value):
+    #x_value должно принимать значения от 0 до 1
+    return min(1.0, max(0.0, 1 - 1.01 ** (x_value ** 0.5 - 1)))
 
 
 def population_to_str(pop):
@@ -943,67 +1213,183 @@ def history_sim(regs_dict):
         return
 
 
-
-def save_populi_image(regs_dict):
+def save_image(regs_dict, type='nations'):
     global img_num
     dict_blues = {}
-    max_pop = -1.0
-    max_in_reg = {}
-    hunger = {}
-    for i in regs_dict.keys():
-        dict_blues[regs_dict[i].img_color] = i
-        if regs_dict[i].hunger == 1:
-            hunger[i] = True
-        else:
-            hunger[i] = False
-        rus_sum = sum([regs_dict[i].population_object.pop_by_nations['Русские'][k][0] +
-                       regs_dict[i].population_object.pop_by_nations['Русские'][k][1]
-                       for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Русские']))])
-        ukr_sum = sum([regs_dict[i].population_object.pop_by_nations['Украинцы'][k][0] +
-                       regs_dict[i].population_object.pop_by_nations['Украинцы'][k][1]
-                       for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Украинцы']))])
-        bel_sum = sum([regs_dict[i].population_object.pop_by_nations['Белорусы'][k][0] +
-                       regs_dict[i].population_object.pop_by_nations['Белорусы'][k][1]
-                       for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Белорусы']))])
-        max_pop = max(max_pop, rus_sum, ukr_sum, bel_sum)
-        max_in_reg[i] = [-1.0, (0, 0, 0)]
-        if rus_sum > max_in_reg[i][0]:
-            max_in_reg[i][0] = rus_sum
-            max_in_reg[i][1] = (200, 30, 120)
-        if ukr_sum > max_in_reg[i][0]:
-            max_in_reg[i][0] = ukr_sum
-            max_in_reg[i][1] = (220, 180, 30)
-        if bel_sum > max_in_reg[i][0]:
-            max_in_reg[i][0] = bel_sum
-            max_in_reg[i][1] = (30, 225, 60)
-    img_density = img.copy()
-    for x in range(0, img_density.width):
-        for y in range(38, img_density.height):
-            t = img_density.getpixel((x, y))
-            if t[0] == 0 and t[1] == 0:
-                if t[2] in dict_blues.keys():
-                    cur_reg = dict_blues[t[2]]
-                    red = max_in_reg[cur_reg][1][0]
-                    green = max_in_reg[cur_reg][1][1]
-                    blue = max_in_reg[cur_reg][1][2]
-                    bright = ((max_in_reg[cur_reg][0] ** 0.5) / (max_pop ** 0.5))
-                    if hunger[cur_reg]:
-                        red = 220
-                        green = 0
-                        blue = 0
-                        bright = 1
-                    img_density.putpixel((x, y), (int(red * bright), int(green * bright), int(blue * bright)))
+    if type == 'nations':
+        directory = "Output/Population/Pop"
+        max_pop = -1.0
+        max_in_reg = {}
+        for i in regs_dict.keys():
+            dict_blues[regs_dict[i].img_color] = i
+            rus_sum = sum([regs_dict[i].population_object.pop_by_nations['Русские'][k][0] +
+                           regs_dict[i].population_object.pop_by_nations['Русские'][k][1]
+                           for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Русские']))])
+            ukr_sum = sum([regs_dict[i].population_object.pop_by_nations['Украинцы'][k][0] +
+                           regs_dict[i].population_object.pop_by_nations['Украинцы'][k][1]
+                           for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Украинцы']))])
+            bel_sum = sum([regs_dict[i].population_object.pop_by_nations['Белорусы'][k][0] +
+                           regs_dict[i].population_object.pop_by_nations['Белорусы'][k][1]
+                           for k in range(0, len(regs_dict[i].population_object.pop_by_nations['Белорусы']))])
+            max_pop = max(max_pop, rus_sum, ukr_sum, bel_sum)
+            max_in_reg[i] = [-1.0, (0, 0, 0)]
+            if rus_sum > max_in_reg[i][0]:
+                max_in_reg[i][0] = rus_sum
+                max_in_reg[i][1] = (200, 30, 120)
+            if ukr_sum > max_in_reg[i][0]:
+                max_in_reg[i][0] = ukr_sum
+                max_in_reg[i][1] = (220, 180, 30)
+            if bel_sum > max_in_reg[i][0]:
+                max_in_reg[i][0] = bel_sum
+                max_in_reg[i][1] = (30, 225, 60)
+        img_density = img.copy()
+        for x in range(0, img_density.width):
+            for y in range(38, img_density.height):
+                t = img_density.getpixel((x, y))
+                if t[0] == 0 and t[1] == 0:
+                    if t[2] in dict_blues.keys():
+                        cur_reg = dict_blues[t[2]]
+                        red = max_in_reg[cur_reg][1][0]
+                        green = max_in_reg[cur_reg][1][1]
+                        blue = max_in_reg[cur_reg][1][2]
+                        bright = ((max_in_reg[cur_reg][0] ** 0.5) / (max_pop ** 0.5))
+                        img_density.putpixel((x, y), (int(red * bright), int(green * bright), int(blue * bright)))
+    if type == 'infra':
+        directory = "Output/Infra/Inf"
+        inf_in_reg = {}
+        max_infra = 1.0 + int(10 * global_building_technology ** 0.5) / 10
+        for i in regs_dict.keys():
+            dict_blues[regs_dict[i].img_color] = i
+            inf_in_reg[i] = regs_dict[i].infrastructure
+        img_density = img.copy()
+        for x in range(0, img_density.width):
+            for y in range(38, img_density.height):
+                t = img_density.getpixel((x, y))
+                if t[0] == 0 and t[1] == 0:
+                    if t[2] in dict_blues.keys():
+                        cur_reg = dict_blues[t[2]]
+                        bright = inf_in_reg[cur_reg] / max_infra
+                        if bright < 0:
+                            red = 0
+                            green = 0
+                            blue = 0
+                        else:
+                            if bright > 1:
+                                red = 0
+                                green = 0
+                                blue = 255
+                            else:
+                                if bright <= 0.5:
+                                    red = 240
+                                    green = min(240, int(240 * 2 * bright))
+                                    blue = 40
+                                else:
+                                    red = max(0, int(240 * 2 * (1 - bright)))
+                                    green = 240
+                                    blue = 40
+                        img_density.putpixel((x, y), (int(red), int(green), int(blue)))
+    if type == 'poverty':
+        directory = "Output/Poverty/Pov"
+        hunger = {}
+        pov_in_reg = {}
+        hung_in_reg = {}
+        for i in regs_dict.keys():
+            dict_blues[regs_dict[i].img_color] = i
+            if regs_dict[i].hunger == 1:
+                hunger[i] = True
+            else:
+                hunger[i] = False
+            pov_in_reg[i] = regs_dict[i].poverty
+            hung_in_reg[i] = regs_dict[i].hungry_poverty
+        img_density = img.copy()
+        for x in range(0, img_density.width):
+            for y in range(38, img_density.height):
+                t = img_density.getpixel((x, y))
+                if t[0] == 0 and t[1] == 0:
+                    if t[2] in dict_blues.keys():
+                        cur_reg = dict_blues[t[2]]
+                        if hunger[cur_reg]:
+                            bright = 1 - (hung_in_reg[cur_reg] / 100)
+                            red = 200 * bright
+                            green = 0
+                            blue = 0
+                        else:
+                            if pov_in_reg[cur_reg] >= 20:
+                                bright = 1 - (pov_in_reg[cur_reg] - 20) / 80
+                                red = 220 - 40 * bright
+                                green = 90 + 160 * bright
+                                blue = 20
+                            else:
+                                bright = 1 - pov_in_reg[cur_reg] / 20
+                                red = 80 - 80 * bright
+                                green = 255
+                                blue = 30 + 30 * bright
+                        img_density.putpixel((x, y), (int(red), int(green), int(blue)))
+    if type == 'gdp':
+        directory = "Output/GDP/GDP"
+        gdp_in_reg = {}
+        max_gdp = 0
+        for i in regs_dict.keys():
+            dict_blues[regs_dict[i].img_color] = i
+            gdp_in_reg[i] = regs_dict[i].gdp_per_person
+            if gdp_in_reg[i] > max_gdp:
+                max_gdp = gdp_in_reg[i]
+        img_density = img.copy()
+        for x in range(0, img_density.width):
+            for y in range(38, img_density.height):
+                t = img_density.getpixel((x, y))
+                if t[0] == 0 and t[1] == 0:
+                    if t[2] in dict_blues.keys():
+                        cur_reg = dict_blues[t[2]]
+                        if gdp_in_reg[cur_reg] > global_gdp_med:
+                            bright = (gdp_in_reg[cur_reg] / max_gdp) ** 0.5
+                            red = 30
+                            green = 30 + 225 * bright
+                            blue = 30
+                        else:
+                            if gdp_in_reg[cur_reg] >= global_gdp_med / 2:
+                                bright = gdp_in_reg[cur_reg] / global_gdp_med
+                                red = 220 - 80 * bright
+                                green = 180 + 70 * bright
+                                blue = 30
+                            else:
+                                bright = 2 * gdp_in_reg[cur_reg] / global_gdp_med
+                                red = 220 * bright
+                                green = 0
+                                blue = 0
+                        img_density.putpixel((x, y), (int(red), int(green), int(blue)))
+    if type == 'urban':
+        directory = "Output/Urban/Urb"
+        urban_in_reg = {}
+        for i in regs_dict.keys():
+            dict_blues[regs_dict[i].img_color] = i
+            urban_in_reg[i] = regs_dict[i].town_pop
+        img_density = img.copy()
+        for x in range(0, img_density.width):
+            for y in range(38, img_density.height):
+                t = img_density.getpixel((x, y))
+                if t[0] == 0 and t[1] == 0:
+                    if t[2] in dict_blues.keys():
+                        cur_reg = dict_blues[t[2]]
+                        bright = urban_in_reg[cur_reg]
+                        red = 250 * bright
+                        green = 250 * bright
+                        blue = 250 * bright
+                        img_density.putpixel((x, y), (int(red), int(green), int(blue)))
     draw = ImageDraw.Draw(img_density)
     fnt = ImageFont.truetype("calibri.ttf", 35)
-    draw.text((30, 1), population_to_str(sum([regs_dict[i].population for i in regs_dict.keys()])), font=fnt,
-              fill=(0, 0, 0))
+    total_pop = sum([regs_dict[i].population for i in regs_dict.keys()])
+    draw.text((30, 1), population_to_str(total_pop), font=fnt, fill=(0, 0, 0))
     draw.text((280, 1), population_to_str(sum([regs_dict[i].region_gdp * russian_cumulative_inflation
                                                for i in regs_dict.keys()])), font=fnt, fill=(0, 0, 0))
-    draw.text((596, 1), str(int(sum([regs_dict[i].poverty for i in regs_dict.keys()]) / len(regs_dict.keys())))
+    draw.text((596, 1), str(int(sum([regs_dict[i].poverty * regs_dict[i].population for i in regs_dict.keys()]) /
+                                total_pop))
               + '%', font=fnt, fill=(0, 0, 0))
-    draw.text((717, 1), str(int(sum([regs_dict[i].literacy for i in regs_dict.keys()]) * 100 / len(regs_dict.keys())))
+    draw.text((717, 1), str(int(sum([regs_dict[i].literacy * regs_dict[i].population for i in regs_dict.keys()]) * 100 /
+                                total_pop))
               + '%', font=fnt, fill=(0, 0, 0))
-    draw.text((840, 1), str(int(sum([regs_dict[i].town_pop for i in regs_dict.keys()]) * 100 / len(regs_dict.keys())))
+    draw.text((840, 1), str(int(sum([regs_dict[i].town_pop * regs_dict[i].population for i in regs_dict.keys()]) * 100 /
+                                total_pop))
               + '%', font=fnt, fill=(0, 0, 0))
     nations_list = ethnic_list(regs_dict)
     pos = 79
@@ -1023,8 +1409,8 @@ def save_populi_image(regs_dict):
         pos += 42
         gray += 3
     draw.text((1773, 1), date_as_str(), font=fnt, fill=(0, 0, 0))
-    img_density.save("Output/Population/Pop" + str(img_num) + '.png', 'PNG')
-    img_num += 1
+    img_density.save(directory + str(img_num[type]) + '.png', 'PNG')
+    img_num[type] += 1
 
 
 def main():
@@ -1033,6 +1419,14 @@ def main():
         os.mkdir('Output')
     if not os.path.exists('Output/Population/'):
         os.mkdir('Output/Population')
+    if not os.path.exists('Output/Infra/'):
+        os.mkdir('Output/Infra')
+    if not os.path.exists('Output/Poverty/'):
+        os.mkdir('Output/Poverty')
+    if not os.path.exists('Output/GDP/'):
+        os.mkdir('Output/GDP')
+    if not os.path.exists('Output/Urban/'):
+        os.mkdir('Output/Urban')
     nations = data.columns.to_list()
     nations = nations[15:len(nations) - 1]
     regs_dict = {}
@@ -1042,8 +1436,13 @@ def main():
     global month, year, global_gdp_med, global_max_med, russian_cumulative_inflation, russian_basic_cost
     global russian_med_gdp, global_agro_technology, global_building_technology
     while year < 2001:
+        print('Year: ' + str(year) + ' Month: ' + str(month))
         if year + month != 1898:
-            save_populi_image(regs_dict)
+            save_image(regs_dict)
+            save_image(regs_dict, type='infra')
+            save_image(regs_dict, type='poverty')
+            save_image(regs_dict, type='gdp')
+            save_image(regs_dict, type='urban')
         if month == 12:
             year += 1
             month = 1
